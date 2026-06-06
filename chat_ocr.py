@@ -1,15 +1,15 @@
 #!/usr/bin/env python3
 """
-wechat_ocr.py — 微信聊天截图 → 结构化对话 (speaker-aware OCR)
+chat_ocr.py — 聊天截图 → 结构化对话 (speaker-aware OCR)
 
 不是纯文本提取，而是把聊天截图还原成结构化对话，重点解决"左右气泡发言人判断错误"：
 OCR 保留 bounding box → 估计气泡 → 检测左右头像候选 → **只用同一水平带(y-range)附近的头像**
 判定 speaker，头像失败再 fallback 到气泡中心位置。低置信度保留 confidence + reason，不硬判。
 
 用法:
-    python scripts/wechat_ocr.py input_screenshots/ --out outputs/chat.json --markdown outputs/chat.md
-    python scripts/wechat_ocr.py one.png --out outputs/chat.json
-    python scripts/wechat_ocr.py imgs/ --backend easyocr --me-side right --markdown outputs/chat.md
+    python scripts/chat_ocr.py input_screenshots/ --out outputs/chat.json --markdown outputs/chat.md
+    python scripts/chat_ocr.py one.png --out outputs/chat.json
+    python scripts/chat_ocr.py imgs/ --backend easyocr --me-side right --markdown outputs/chat.md
 
 需要先装一个 OCR 后端（任选其一），详见 references/ocr-backends.md：
     vision (macOS, 推荐) / easyocr / paddleocr / tesseract
@@ -108,7 +108,7 @@ def ocr_paddleocr(path, W, H):
 def ocr_tesseract(path, W, H):
     import pytesseract
     from pytesseract import Output
-    lang = os.environ.get("WECHAT_OCR_TESS_LANG", "chi_sim+chi_tra+eng")
+    lang = os.environ.get("CHAT_OCR_TESS_LANG", "chi_sim+chi_tra+eng")
     d = pytesseract.image_to_data(path, lang=lang, output_type=Output.DICT)  # pass path, not PIL image (avoids a Pillow decode quirk)
     groups = {}
     for i in range(len(d["text"])):
@@ -168,7 +168,7 @@ def run_ocr(path, backend, W, H):
 
 # ----------------------------------------------------------------------------- #
 # Avatar detection — pure numpy (no cv2). Find colorful square-ish blocks in the
-# far-left / far-right margins (where WeChat avatars live).
+# far-left / far-right margins (where Chat avatars live).
 # ----------------------------------------------------------------------------- #
 def detect_avatars(path, W, H):
     if Image is None or np is None:
@@ -412,7 +412,7 @@ LABELS = {"other": "对方", "me": "我", "system": "系统", "unknown": "❓未
 
 
 def to_markdown(messages, sources, backend):
-    out = ["# 微信聊天（OCR 还原）", "",
+    out = ["# 聊天（OCR 还原）", "",
            f"> 来源：{', '.join(sources)}  ·  后端：{backend}  ·  低置信度项已标注 confidence/reason", ""]
     for m in messages:
         flag = "" if m["confidence"] >= 0.75 else f"  _(conf {m['confidence']} · {m['reason']})_"
@@ -435,9 +435,9 @@ def collect_images(inp):
 
 def main():
     ap = argparse.ArgumentParser(
-        description="微信聊天截图 → 结构化对话 (speaker-aware OCR)",
+        description="聊天截图 → 结构化对话 (speaker-aware OCR)",
         formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog="示例:\n  python scripts/wechat_ocr.py input_screenshots/ "
+        epilog="示例:\n  python scripts/chat_ocr.py input_screenshots/ "
                "--out outputs/chat.json --markdown outputs/chat.md")
     ap.add_argument("input", help="一张截图，或一个装满截图的目录（按文件名排序拼接）")
     ap.add_argument("--out", default="outputs/chat.json", help="JSON 输出路径")
@@ -445,7 +445,7 @@ def main():
     ap.add_argument("--backend", default="auto",
                     choices=["auto"] + BACKEND_ORDER, help="OCR 后端，默认 auto")
     ap.add_argument("--me-side", default="right", choices=["right", "left"],
-                    help="\"我\"在哪一侧（微信默认 right）")
+                    help="\"我\"在哪一侧（聊天软件默认 right）")
     ap.add_argument("--crop-top", type=float, default=0.0,
                     help="额外忽略顶部比例（默认 0；状态栏已按内容自动识别）")
     ap.add_argument("--crop-bottom", type=float, default=0.0,
@@ -484,9 +484,9 @@ def main():
     by = {}
     for m in messages:
         by[m["speaker"]] = by.get(m["speaker"], 0) + 1
-    print(f"[wechat-ocr] backend={_CHOSEN}  images={len(paths)}  messages={len(messages)}  "
+    print(f"[chat-ocr] backend={_CHOSEN}  images={len(paths)}  messages={len(messages)}  "
           f"low_conf={low}  by_speaker={by}")
-    print(f"[wechat-ocr] JSON -> {a.out}" + (f"  Markdown -> {a.markdown}" if a.markdown else ""))
+    print(f"[chat-ocr] JSON -> {a.out}" + (f"  Markdown -> {a.markdown}" if a.markdown else ""))
 
 
 if __name__ == "__main__":

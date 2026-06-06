@@ -1,4 +1,4 @@
-"""把微信聊天截图读成结构化消息。
+"""把聊天截图读成结构化消息。
 
 发言人判定不让模型直接猜"谁说的"(小视觉模型常把左右判反),而是让它只给出
 每条消息的水平位置百分比 cx,再用几何规则映射:贴右=我、贴左=对方、居中=系统。
@@ -14,7 +14,7 @@ from pathlib import Path
 
 import llm
 
-# 读取模式:vlm(纯视觉模型,默认) 或 ocr(本地 OCR + 头像/几何判定,复用 vendored wechat_ocr.py)
+# 读取模式:vlm(纯视觉模型,默认) 或 ocr(本地 OCR + 头像/几何判定,复用 vendored chat_ocr.py)
 _MODE = {"read_mode": "vlm", "ocr_backend": "auto", "me_side": "right",
          "crop_left": 0.0, "crop_bottom": 0.0}
 
@@ -30,11 +30,11 @@ def configure(read_mode: str = "vlm", ocr_backend: str = "auto", me_side: str = 
 
 _OCR_LABEL = {"me": "我", "other": "对方", "system": "系统", "unknown": "unknown"}
 
-_SYS = "你是解析微信聊天截图的助手。只输出 JSON,不要任何解释或多余文字。"
+_SYS = "你是解析聊天截图的助手。只输出 JSON,不要任何解释或多余文字。"
 
 
 def _prompt(last_n: int) -> str:
-    return f"""这是一张微信聊天截图。从上到下列出最近的消息(最多 {last_n} 条)。
+    return f"""这是一张聊天截图。从上到下列出最近的消息(最多 {last_n} 条)。
 严格只输出 JSON(不要 markdown 代码块、不要解释):
 {{"chat_title": "顶部标题栏里的聊天名;看不到就填 null", "messages": [{{"text": "消息文字", "cx": 整数}}]}}
 
@@ -152,13 +152,13 @@ def _extract_group_names(items: list):
 
 
 def _read_via_ocr(png_path: str, last_n: int) -> dict:
-    """复用 vendored wechat_ocr.py:本地 OCR + 头像/几何判定发言人(比让模型猜更稳)。"""
-    import wechat_ocr  # 同目录 vendored 脚本
+    """复用 vendored chat_ocr.py:本地 OCR + 头像/几何判定发言人(比让模型猜更稳)。"""
+    import chat_ocr  # 同目录 vendored 脚本
 
-    raw = wechat_ocr.process_image(png_path, _MODE["ocr_backend"], _MODE["me_side"])
+    raw = chat_ocr.process_image(png_path, _MODE["ocr_backend"], _MODE["me_side"])
     if any((m.get("text") or "").startswith("⚠️") for m in raw):
         raise RuntimeError("OCR 未读出文字")
-    _, img_h = wechat_ocr.image_size(png_path)   # 截图高度,用于判定顶部标题栏
+    _, img_h = chat_ocr.image_size(png_path)   # 截图高度,用于判定顶部标题栏
 
     # 顶部第一条若是居中短文本(非时间/日期)→ 当作聊天标题(手机版居中标题)
     title = None

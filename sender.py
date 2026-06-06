@@ -1,4 +1,4 @@
-"""把回复发到微信:剪贴板粘贴 + 回车。dry_run 下只打印不发送。"""
+"""把回复发到聊天软件:剪贴板粘贴 + 回车。dry_run 下只打印不发送。"""
 from __future__ import annotations
 
 import subprocess
@@ -8,7 +8,7 @@ def _pbcopy(text: str) -> None:
     subprocess.run(["pbcopy"], input=text.encode("utf-8"), check=False)
 
 
-def send(text: str, app_name: str = "WeChat", dry_run: bool = True, send_with: str = "enter") -> None:
+def send(text: str, app_name: str = "Chat", dry_run: bool = True, send_with: str = "enter") -> None:
     text = (text or "").strip()
     if not text:
         return

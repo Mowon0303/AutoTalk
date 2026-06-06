@@ -94,12 +94,13 @@ def run(cfg: dict, once: bool = False) -> None:
     llm.configure(cfg.get("provider", "anthropic"), cfg.get("ollama_host", "http://localhost:11434"))
     vision.configure(cfg.get("read_mode", "vlm"), cfg.get("ocr_backend", "auto"),
                      cfg.get("me_side", "right"), cfg.get("crop_left", 0.0), cfg.get("crop_bottom", 0.0))
+    capture.configure(cfg.get("app_aliases", []))
     interval = max(3, int(cfg.get("poll_interval_seconds", 5)))
     print(
         f"AutoTalk 启动 | 后端={cfg.get('provider', 'anthropic')} | 模型={cfg['model']} "
         f"| 轮询={interval}s | dry_run={cfg['dry_run']}"
     )
-    print("请保持微信窗口可见。Ctrl+C 退出。")
+    print("请保持聊天软件窗口可见。Ctrl+C 退出。")
     try:
         while True:
             try:

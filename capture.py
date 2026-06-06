@@ -14,7 +14,7 @@ def _osascript(script: str) -> str:
 
 
 def window_bounds(process_name: str):
-    """返回微信主窗口的 (x, y, w, h);拿不到时返回 None(改为全屏截图)。"""
+    """返回聊天软件主窗口的 (x, y, w, h);拿不到时返回 None(改为全屏截图)。"""
     script = f'''
     set _info to ""
     tell application "System Events"
@@ -40,17 +40,25 @@ def window_bounds(process_name: str):
     return (x, y, w, h)
 
 
-_WECHAT_NAMES = ("wechat", "微信", "weixin")
+_ALIASES = []   # 目标应用的窗口属主名别名(本地化名等),由 configure() 从配置注入
 
 
-def _is_wechat_owner(owner, process_name: str) -> bool:
+def configure(aliases=None) -> None:
+    global _ALIASES
+    _ALIASES = [str(a).lower() for a in (aliases or []) if a]
+
+
+def _is_target_owner(owner, process_name: str) -> bool:
     o = (owner or "").lower()
-    return o == (process_name or "").lower() or any(n in o for n in _WECHAT_NAMES)
+    if not o:
+        return False
+    cands = ([process_name.lower()] if process_name else []) + _ALIASES
+    return any(c and (o == c or c in o) for c in cands)
 
 
 def window_id(process_name: str):
-    """用 Quartz 找微信主窗口的 CGWindowID(按窗口抓取,被遮挡也只截微信)。
-    注意:微信的窗口 owner 名是本地化的「微信」,不一定等于进程名 WeChat。"""
+    """用 Quartz 找目标应用主窗口的 CGWindowID(按窗口抓取,被遮挡也只截它自己)。
+    注意:有些应用窗口 owner 名是本地化名,不一定等于进程名,可在配置 app_aliases 里补。"""
     try:
         import Quartz
     except Exception:
@@ -60,7 +68,7 @@ def window_id(process_name: str):
         wins = Quartz.CGWindowListCopyWindowInfo(opt, Quartz.kCGNullWindowID) or []
         best_id, best_area = None, 0.0
         for w in wins:
-            if not _is_wechat_owner(w.get("kCGWindowOwnerName"), process_name):
+            if not _is_target_owner(w.get("kCGWindowOwnerName"), process_name):
                 continue
             if w.get("kCGWindowLayer", 0) != 0:        # 只要普通窗口层(排除菜单/悬浮层)
                 continue
@@ -74,7 +82,7 @@ def window_id(process_name: str):
 
 
 def list_window_owners() -> list:
-    """列出当前所有窗口的 owner 名(诊断用:确认微信到底叫什么)。"""
+    """列出当前所有窗口的 owner 名(诊断用:确认聊天软件到底叫什么)。"""
     try:
         import Quartz
     except Exception:
@@ -84,7 +92,7 @@ def list_window_owners() -> list:
 
 
 def grab(process_name: str) -> str:
-    """截图(只截微信窗口本身,即使被别的窗口挡住),返回临时 png 路径。调用方负责删除。"""
+    """截图(只截聊天软件窗口本身,即使被别的窗口挡住),返回临时 png 路径。调用方负责删除。"""
     fd, path = tempfile.mkstemp(suffix=".png", prefix="autotalk_")
     os.close(fd)
     wid = window_id(process_name)

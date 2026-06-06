@@ -1,4 +1,4 @@
-"""体检:`python main.py --check` —— 跑真机前确认依赖/权限/ollama/微信都就绪。"""
+"""体检:`python main.py --check` —— 跑真机前确认依赖/权限/ollama/聊天软件都就绪。"""
 from __future__ import annotations
 
 import json
@@ -17,6 +17,7 @@ def _p(ok: bool, label: str, hint: str = "") -> bool:
 
 def run(cfg: dict) -> None:
     print("AutoTalk 体检\n")
+    capture.configure(cfg.get("app_aliases", []))
     all_ok = True
 
     # 1) 截图(屏幕录制权限)
@@ -30,9 +31,9 @@ def run(cfg: dict) -> None:
     except Exception as e:
         all_ok &= _p(False, "截图", str(e))
 
-    # 2) 微信在运行
+    # 2) 聊天软件在运行
     running = subprocess.run(["pgrep", "-x", cfg["app_name"]], capture_output=True).returncode == 0
-    all_ok &= _p(running, f"微信进程「{cfg['app_name']}」在运行", "打开微信并停在某个会话")
+    all_ok &= _p(running, f"聊天软件进程「{cfg['app_name']}」在运行", "打开聊天软件并停在某个会话")
 
     # 3) 模型后端
     if cfg["provider"] == "ollama":

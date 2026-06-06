@@ -1,0 +1,37 @@
+# AutoTalk 配置模板 —— 复制为 config.yaml 后按需修改:
+#   cp config.example.yaml config.yaml
+
+# 后端: ollama(本地,免 key、数据不出本机) 或 anthropic(云端,需 ANTHROPIC_API_KEY)
+provider: ollama
+ollama_host: http://localhost:11434
+#   provider: anthropic
+#   model: claude-sonnet-4-6     # 云端:export ANTHROPIC_API_KEY + pip install anthropic
+
+# 读截图方式: ocr(本地 OCR + 头像几何判定,发言人更准) 或 vlm(视觉模型直接读)
+#   ocr 需装后端;macOS 最轻量: pip install pillow numpy pyobjc-framework-Vision pyobjc-framework-Quartz
+read_mode: ocr
+ocr_backend: auto      # auto / vision(macOS原生) / easyocr / paddleocr / tesseract
+me_side: right         # "我"在右侧;镜像布局改 left
+crop_left: 0.40        # 桌面整窗截图:裁掉左侧会话列表(约左 40%);手机/已裁好的截图设 0
+crop_bottom: 0.12      # 裁掉底部输入框/工具栏(约底 12%)
+
+# 模型(anthropic 填 Claude 名;ollama 填模型标签,vlm 模式须为视觉模型)
+model: qwen2.5vl:7b
+vision_model:          # 留空则用 model
+reply_model:           # 留空则用 model
+summary_model: llama3.2
+
+# —— 目标应用(必填)——
+# app_name: 目标 App 在系统里显示的应用名/进程名
+# app_aliases: 窗口属主名的别名(本地化名等);若该 App 窗口 owner 名和应用名不同,在此补上
+app_name: ""
+app_aliases: []
+
+poll_interval_seconds: 5      # 轮询间隔(秒),别低于 3
+read_last_n: 8                # 每次读取最近多少条消息作为上下文
+dry_run: true                 # true=只弹确认框不真发;跑通后改 false 或用 --send
+send_with: enter              # enter 或 cmd_enter,取决于该 App 的发送快捷键
+
+default_persona: serious      # 默认人设(skills/personas/<名字>.md)
+contacts: {}                  # 联系人->人设映射,如 {张三: serious}
+update_memory: true           # 发送后是否自动更新该联系人记忆摘要

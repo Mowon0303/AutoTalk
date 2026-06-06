@@ -1,4 +1,4 @@
-"""python main.py --snap —— 抓一张微信截图,存「实际分析的区域」+ 预览打开 + 打印解析。
+"""python main.py --snap —— 抓一张聊天软件截图,存「实际分析的区域」+ 预览打开 + 打印解析。
 
 用来亲眼核对:图里是不是右侧对话区、读出的发言人/内容对不对。
 """
@@ -20,6 +20,7 @@ def run(cfg: dict) -> None:
     llm.configure(cfg.get("provider", "anthropic"), cfg.get("ollama_host", "http://localhost:11434"))
     vision.configure(cfg.get("read_mode", "vlm"), cfg.get("ocr_backend", "auto"),
                      cfg.get("me_side", "right"), cfg.get("crop_left", 0.0), cfg.get("crop_bottom", 0.0))
+    capture.configure(cfg.get("app_aliases", []))
 
     try:
         png = capture.grab(cfg["app_name"])
@@ -29,11 +30,11 @@ def run(cfg: dict) -> None:
 
     wid = capture.window_id(cfg["app_name"])
     if wid:
-        print(f"截图方式:按窗口ID #{wid}(只截微信窗口,不受遮挡)✅")
+        print(f"截图方式:按窗口ID #{wid}(只截聊天软件窗口,不受遮挡)✅")
     else:
-        print("截图方式:区域截图(可能截到挡在上面的窗口!)⚠️ 没定位到微信窗口。")
+        print("截图方式:区域截图(可能截到挡在上面的窗口!)⚠️ 没定位到聊天软件窗口。")
         print("  当前窗口 owner:", capture.list_window_owners())
-        print("  若列表里微信叫别的名,把 config.yaml 的 app_name 改成那个名。")
+        print("  若列表里聊天软件叫别的名,把 config.yaml 的 app_name 改成那个名。")
 
     # 保存「实际分析的区域」(已裁掉左侧会话列表 / 底部输入框)供你核对
     view, tmp = vision._apply_crop(png)
