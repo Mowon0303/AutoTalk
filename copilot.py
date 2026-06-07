@@ -173,11 +173,23 @@ class Handler(BaseHTTPRequestHandler):
             self._send(404, "text/plain", b"not found")
 
 
-def main() -> None:
-    url = f"http://{HOST}:{PORT}"
-    print(f"AutoTalk 副驾 → {url}(只读屏 + 复制,不自动发送)。Ctrl+C 退出。")
-    threading.Timer(0.8, lambda: webbrowser.open(url)).start()
+def _serve_forever() -> None:
     HTTPServer((HOST, PORT), Handler).serve_forever()
+
+
+def main() -> None:
+    import sys
+
+    url = f"http://{HOST}:{PORT}"
+    if "--window" in sys.argv:          # 原生应用窗口(需 pip install pywebview)
+        import webview
+        threading.Thread(target=_serve_forever, daemon=True).start()
+        webview.create_window("AutoTalk 副驾", url, width=1120, height=740, min_size=(820, 520))
+        webview.start()                 # 阻塞,直到关闭窗口
+    else:                               # 浏览器模式
+        print(f"AutoTalk 副驾 → {url}(只读屏 + 复制,不自动发送)。Ctrl+C 退出。")
+        threading.Timer(0.8, lambda: webbrowser.open(url)).start()
+        _serve_forever()
 
 
 if __name__ == "__main__":

@@ -6,3 +6,4 @@ anthropic>=0.40
 #   macOS 最轻量(原生 vision 后端): pip install pillow numpy pyobjc-framework-Vision pyobjc-framework-Quartz
 #   或跨平台: pip install pillow numpy easyocr   (会拉 torch,较重)
 # 菜单栏 UI(可选,menubar.py): pip install rumps
+# 桌面应用窗口(可选,copilot.py --window): pip install pywebview
