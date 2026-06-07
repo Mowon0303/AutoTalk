@@ -68,6 +68,8 @@ python main.py --snap      # 抓一张:存「实际分析区域」+预览打开+
 python main.py --once      # 真机一轮:读对话→草稿→确认框(dry_run 不真发)
 python main.py             # 持续监听
 python main.py --send      # 真正发送(务必先用不重要的会话测)
+python copilot.py          # 本地副驾 UI:截图预览 + 建议回复 + 复制
+python copilot.py --window # 原生窗口模式(需 pywebview)
 ```
 
 `selftest.py` 可对一张静态截图离线跑「读取→草稿」(不截屏、零权限),最适合调参:
