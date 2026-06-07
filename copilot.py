@@ -113,6 +113,15 @@ def read_and_suggest() -> dict:
     }
 
 
+def regenerate_one(title: str, persona_name: str, messages: list) -> str:
+    """对已显示的对话,用指定人设重新生成一条建议(复用已读消息,不重新截图)。"""
+    mem = memory.load(title)
+    manual = memory.manual_context(title)
+    name = persona_name or cfg.get("default_persona", "serious")
+    return agent.draft_reply(messages, persona.load(name), mem,
+                             cfg["reply_model"], cfg["read_last_n"], manual)
+
+
 PAGE = """<!doctype html>
 <html lang="zh-CN">
 <head>
@@ -425,12 +434,33 @@ PAGE = """<!doctype html>
   }
   .copy.copied{color:#fff;background:var(--ok);border-color:var(--ok)}
   .suggestion-text{
-    white-space:pre-wrap;
-    word-break:break-word;
-    overflow-wrap:anywhere;
+    width:100%;
+    min-height:50px;
+    resize:vertical;
+    border:1px solid transparent;
+    border-radius:6px;
+    background:#fdfefe;
+    color:#202b34;
+    font:inherit;
     font-size:15px;
     line-height:1.58;
+    padding:7px 9px;
+    outline:none;
   }
+  .suggestion:hover .suggestion-text{border-color:var(--line)}
+  .suggestion-text:focus{border-color:var(--accent);box-shadow:0 0 0 3px rgba(18,108,115,.10);background:#fff}
+  .suggestion-actions{display:flex;gap:6px}
+  .regen{
+    min-width:34px;min-height:30px;padding:6px 9px;
+    border:1px solid var(--line-strong);background:#f8fafb;color:#24313c;font-weight:650;
+  }
+  .regen:disabled{opacity:.55}
+  .goal-presets{display:flex;flex-wrap:wrap;gap:6px;margin-top:6px}
+  .preset{
+    padding:4px 9px;border-radius:999px;
+    border:1px solid var(--line-strong);background:#f8fafb;color:#24313c;font-size:12px;
+  }
+  .preset:hover{background:var(--accent-soft);border-color:var(--accent)}
   .empty-state{
     min-height:120px;
     display:grid;
@@ -540,6 +570,12 @@ PAGE = """<!doctype html>
           <div class="context-field">
             <label for="replyIntent">目标(阶段性)</label>
             <textarea id="replyIntent" placeholder="例如: 从认识推进到暧昧 / 约对方出来 / 维持朋友别越界"></textarea>
+            <div class="goal-presets">
+              <button type="button" class="preset" onclick="setGoal('从认识慢慢推进到暧昧')">认识→暧昧</button>
+              <button type="button" class="preset" onclick="setGoal('找个自然的由头约对方出来')">约出来</button>
+              <button type="button" class="preset" onclick="setGoal('推进到确定关系')">确定关系</button>
+              <button type="button" class="preset" onclick="setGoal('维持朋友关系,别越界')">维持朋友</button>
+            </div>
           </div>
           <div class="context-field">
             <label for="replyAvoid">不要提/边界</label>
@@ -606,6 +642,8 @@ const els={
   errorBox:document.getElementById('errorBox')
 };
 let currentProfileTitle='';
+let lastMessages=[];
+let lastTitle='';
 function esc(value){
   return String(value ?? '').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 }
@@ -682,9 +720,12 @@ function renderSuggestions(items,note){
     <article class="suggestion">
       <div class="suggestion-top">
         <div class="tone">${esc(item.persona || 'persona')}</div>
-        <button class="copy" title="复制" onclick="copySuggestion(${index},this)">复制</button>
+        <div class="suggestion-actions">
+          <button class="regen" title="换个说法再生成这条" data-persona="${esc(item.persona || '')}" onclick="regenOne(${index},this)">↻</button>
+          <button class="copy" title="复制(可先编辑)" onclick="copySuggestion(${index},this)">复制</button>
+        </div>
       </div>
-      <div class="suggestion-text" id="suggestion-${index}">${esc(item.text)}</div>
+      <textarea class="suggestion-text" id="suggestion-${index}" spellcheck="false">${esc(item.text)}</textarea>
     </article>
   `).join('');
 }
@@ -692,6 +733,8 @@ function renderPayload(data){
   renderRuntime(data.status);
   const messages=Array.isArray(data.messages)?data.messages:[];
   const suggestions=Array.isArray(data.suggestions)?data.suggestions:[];
+  lastMessages=messages;
+  lastTitle=data.title || '';
   els.chatTitle.textContent=data.title || '当前对话';
   els.chatMeta.textContent=`${messages.length} 条消息 · ${new Date().toLocaleTimeString()}`;
   els.groupBadge.textContent=data.is_group?'群聊':'1v1';
@@ -775,7 +818,8 @@ function fallbackCopy(text){
   document.body.removeChild(t);
 }
 async function copySuggestion(index,button){
-  const text=document.getElementById(`suggestion-${index}`).textContent;
+  const el=document.getElementById(`suggestion-${index}`);
+  const text=('value' in el)?el.value:el.textContent;
   try{
     if(navigator.clipboard && window.isSecureContext) await navigator.clipboard.writeText(text);
     else fallbackCopy(text);
@@ -786,6 +830,33 @@ async function copySuggestion(index,button){
     showError('复制失败: '+String(err));
   }
 }
+function setGoal(text){
+  els.replyIntent.value=text;
+  els.replyIntent.focus();
+}
+async function regenOne(index,button){
+  if(!lastMessages.length){showError('先读取一次对话,再用 ↻ 重生成。');return;}
+  const persona=button.getAttribute('data-persona')||'';
+  const ta=document.getElementById(`suggestion-${index}`);
+  button.disabled=true;
+  try{
+    const res=await fetch('/api/regenerate',{
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({title:lastTitle,persona:persona,messages:lastMessages})
+    });
+    const data=await res.json();
+    if(data.error){showError('再生成失败: '+data.error);}
+    else if(typeof data.text==='string'){ta.value=data.text;showError('');}
+  }catch(err){showError('再生成失败: '+String(err));}
+  finally{button.disabled=false;}
+}
+document.addEventListener('keydown',e=>{
+  if((e.metaKey||e.ctrlKey)&&(e.key==='r'||e.key==='R')){
+    e.preventDefault();
+    if(!els.readBtn.disabled)readNow();
+  }
+});
 async function boot(){
   try{
     const res=await fetch('/api/status',{cache:'no-store'});
@@ -830,16 +901,22 @@ class Handler(BaseHTTPRequestHandler):
             self._send(404, "text/plain", b"not found")
 
     def do_POST(self):
-        if self.path != "/api/context":
+        if self.path not in ("/api/context", "/api/regenerate"):
             self._send(404, "text/plain", b"not found")
             return
         try:
             n = int(self.headers.get("Content-Length", "0") or "0")
-            body = self.rfile.read(n).decode("utf-8") if n else "{}"
-            data = json.loads(body)
-            title = data.get("title")
-            saved = memory.save_manual_context(title, data.get("manual") or {})
-            payload = {"ok": True, "profile": {"title": title, "manual": saved}}
+            data = json.loads(self.rfile.read(n).decode("utf-8")) if n else {}
+            if self.path == "/api/context":
+                title = data.get("title")
+                saved = memory.save_manual_context(title, data.get("manual") or {})
+                payload = {"ok": True, "profile": {"title": title, "manual": saved}}
+            else:  # /api/regenerate
+                text = regenerate_one(data.get("title") or "unknown",
+                                      data.get("persona") or "", data.get("messages") or [])
+                payload = {"text": text}
+        except SystemExit as e:
+            payload = {"ok": False, "error": _error_text(e)}
         except Exception as e:
             payload = {"ok": False, "error": str(e)}
         self._send(200, "application/json; charset=utf-8",
