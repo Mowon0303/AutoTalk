@@ -931,7 +931,7 @@ def main() -> None:
     import sys
 
     url = f"http://{HOST}:{PORT}"
-    if "--window" in sys.argv:          # 原生应用窗口(需 pip install pywebview)
+    if "--window" in sys.argv or getattr(sys, "frozen", False):   # 打包后默认走原生窗口
         import webview
         threading.Thread(target=_serve_forever, daemon=True).start()
         webview.create_window("AutoTalk 副驾", url, width=1120, height=740, min_size=(820, 520))

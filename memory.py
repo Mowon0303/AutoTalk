@@ -7,9 +7,10 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
+import appdirs
 import llm
 
-MEM_DIR = Path(__file__).resolve().parent / "skills" / "memory"
+MEM_DIR = appdirs.base_dir() / "skills" / "memory"
 MANUAL_START = "<!-- autotalk:manual-context:start -->"
 MANUAL_END = "<!-- autotalk:manual-context:end -->"
 MANUAL_SECTIONS = {

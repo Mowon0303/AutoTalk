@@ -4,7 +4,9 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
-PERSONA_DIR = Path(__file__).resolve().parent / "skills" / "personas"
+import appdirs
+
+PERSONA_DIR = appdirs.base_dir() / "skills" / "personas"
 
 
 def load(name: str) -> str:

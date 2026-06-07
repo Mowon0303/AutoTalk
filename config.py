@@ -3,6 +3,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import appdirs
+
 try:
     import yaml
 except ImportError:  # pragma: no cover
@@ -38,7 +40,7 @@ def load(path: str | None = None) -> dict:
     """读取 config.yaml,补齐默认值,处理模型回退。"""
     if yaml is None:
         raise SystemExit("缺少依赖 PyYAML,请先运行: pip install -r requirements.txt")
-    p = Path(path) if path else ROOT / "config.yaml"
+    p = Path(path) if path else appdirs.base_dir() / "config.yaml"
     cfg = dict(_DEFAULTS)
     if p.exists():
         data = yaml.safe_load(p.read_text(encoding="utf-8")) or {}

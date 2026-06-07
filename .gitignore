@@ -10,6 +10,10 @@ config.yaml
 # 生成的启动器(含本机绝对路径),用 make_app.sh 重新生成
 AutoTalk.app/
 
+# py2app 打包产物
+build/
+dist/
+
 # 私密数据:不提交到仓库
 last_capture.png
 skills/memory/*.md

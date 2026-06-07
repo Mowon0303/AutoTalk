@@ -9,6 +9,7 @@
   - 每条建议加 ↻「再生成」按钮:复用当前对话、同人设单独重出一条,无需整页重读。
   - 快捷键 ⌘R / Ctrl+R 触发「读取」。
   - 新增 `/api/regenerate` 接口(POST `{title, persona, messages}` → 单条建议)。
+- py2app 打包:新增 `setup_app.py` + `appdirs.py`,可构建自包含的 `AutoTalk.app`(`python setup_app.py py2app`)。打包态把用户数据(config / 记忆 / 截图)移到 `~/Library/Application Support/AutoTalk`,开发态路径不变。
 
 ### Changed
 - 手动上下文用持续的「目标(阶段性)」(`goal`)取代逐条输入的「我这次想表达」(`reply_intent`):设一次长期生效,agent 朝该阶段性目标循序渐进地给建议,不再要求每条都手填意图。同步更新 `agent` 回复策略、`copilot` UI 标签/占位与前后端字段。
