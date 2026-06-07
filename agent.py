@@ -26,4 +26,4 @@ def draft_reply(messages, persona_text: str, memory_text: str, model: str, last_
         f"## 关于该联系人的记忆\n{memory_text or '(暂无)'}"
     )
     user = f"## 当前对话(最后一条是对方刚发的)\n{convo}\n\n请直接给出你要发送的回复:"
-    return llm.call_text(model, system, user, max_tokens=400, temperature=0.7)
+    return llm.call_text(model, system, user, max_tokens=400, temperature=0.5)

@@ -5,3 +5,4 @@ anthropic>=0.40
 # 仅 read_mode=ocr 时需要(本地 OCR + 头像几何判定):
 #   macOS 最轻量(原生 vision 后端): pip install pillow numpy pyobjc-framework-Vision pyobjc-framework-Quartz
 #   或跨平台: pip install pillow numpy easyocr   (会拉 torch,较重)
+# 菜单栏 UI(可选,menubar.py): pip install rumps
