@@ -125,7 +125,7 @@ def run(cfg: dict, once: bool = False) -> None:
     capture.configure(cfg.get("app_aliases", []))
     interval = max(3, int(cfg.get("poll_interval_seconds", 5)))
     print(
-        f"AutoTalk 启动 | 后端={cfg.get('provider', 'anthropic')} | 模型={cfg['model']} "
+        f"DraftMate 启动 | 后端={cfg.get('provider', 'anthropic')} | 模型={cfg['model']} "
         f"| 轮询={interval}s | dry_run={cfg['dry_run']}"
     )
     print("请保持聊天软件窗口可见。Ctrl+C 退出。")

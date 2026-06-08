@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# AutoTalk 一键安装:建 venv + 装依赖 + 自检。可重复运行。
+# DraftMate 一键安装:建 venv + 装依赖 + 自检。可重复运行。
 set -euo pipefail
 cd "$(dirname "$0")"
 

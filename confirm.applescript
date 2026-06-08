@@ -3,7 +3,7 @@ on run argv
 	set theContext to item 1 of argv
 	set theDraft to item 2 of argv
 	try
-		set theResult to display dialog theContext default answer theDraft buttons {"跳过", "发送"} default button "发送" with title "AutoTalk 回复确认"
+		set theResult to display dialog theContext default answer theDraft buttons {"跳过", "发送"} default button "发送" with title "DraftMate 回复确认"
 	on error
 		return "跳过" & tab & ""
 	end try

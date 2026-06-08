@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""AutoTalk —— 桌面聊天软件自动回复助手。
+"""DraftMate —— 桌面回复副驾(草稿助手)。
 
-截图读取聊天软件 -> 大模型理解对话 -> 套人设+记忆生成草稿 -> 人工确认 -> 发送。
+截图读取对话 -> 大模型理解 -> 套人设+记忆生成草稿 -> 人工确认 -> 发送。
 """
 from __future__ import annotations
 
@@ -13,7 +13,7 @@ import watcher
 
 def main() -> None:
     ap = argparse.ArgumentParser(
-        description="AutoTalk: 截图读聊天软件 -> 生成草稿 -> 人工确认 -> 发送"
+        description="DraftMate: 截图读对话 -> 生成草稿 -> 人工确认 -> 发送"
     )
     ap.add_argument("-c", "--config", help="配置文件路径(默认 ./config.yaml)")
     ap.add_argument("--once", action="store_true", help="只跑一轮(调试用)")

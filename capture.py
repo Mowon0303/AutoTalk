@@ -93,7 +93,7 @@ def list_window_owners() -> list:
 
 def grab(process_name: str) -> str:
     """截图(只截聊天软件窗口本身,即使被别的窗口挡住),返回临时 png 路径。调用方负责删除。"""
-    fd, path = tempfile.mkstemp(suffix=".png", prefix="autotalk_")
+    fd, path = tempfile.mkstemp(suffix=".png", prefix="draftmate_")
     os.close(fd)
     wid = window_id(process_name)
     if wid:

@@ -16,7 +16,7 @@ def _p(ok: bool, label: str, hint: str = "") -> bool:
 
 
 def run(cfg: dict) -> None:
-    print("AutoTalk 体检\n")
+    print("DraftMate 体检\n")
     capture.configure(cfg.get("app_aliases", []))
     all_ok = True
 

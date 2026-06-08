@@ -59,7 +59,7 @@ def _apply_crop(png_path: str):
             y1 = int(h * (1 - bottom)) if bottom > 0 else h
             if x0 >= w or y1 <= 0:
                 return png_path, None
-            fd, tmp = tempfile.mkstemp(suffix=".png", prefix="autotalk_crop_")
+            fd, tmp = tempfile.mkstemp(suffix=".png", prefix="draftmate_crop_")
             os.close(fd)
             im.crop((x0, 0, w, y1)).save(tmp)
             return tmp, tmp

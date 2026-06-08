@@ -1,4 +1,4 @@
-"""AutoTalk 菜单栏 App(macOS)。
+"""DraftMate 菜单栏 App(macOS)。
 
 功能:后台监听 + 草稿历史 + 看最近截图 + 人设快速切换 + 暂停时待办计数。
 依赖: pip install rumps
@@ -32,9 +32,9 @@ LAST_CAPTURE = os.path.join(HERE, "last_capture.png")
 PERSONA_DIR = os.path.join(HERE, "skills", "personas")
 
 
-class AutoTalkApp(rumps.App):
+class DraftMateApp(rumps.App):
     def __init__(self) -> None:
-        super().__init__("AutoTalk", title="💬", quit_button=None)
+        super().__init__("DraftMate", title="💬", quit_button=None)
         self.cfg = config.load()
         llm.configure(self.cfg.get("provider", "anthropic"),
                       self.cfg.get("ollama_host", "http://localhost:11434"))
@@ -185,10 +185,10 @@ class AutoTalkApp(rumps.App):
     @staticmethod
     def _notify(title: str, msg: str) -> None:
         try:
-            rumps.notification("AutoTalk", title, msg)
+            rumps.notification("DraftMate", title, msg)
         except Exception:
             pass
 
 
 if __name__ == "__main__":
-    AutoTalkApp().run()
+    DraftMateApp().run()

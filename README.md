@@ -1,6 +1,6 @@
-# AutoTalk
+# DraftMate
 
-桌面聊天软件（macOS）自动回复助手 —— 截图读对话、套人设+记忆生成草稿、**人工确认后**发送。可全程跑在本地（Ollama），数据不出本机。
+桌面回复副驾（macOS）—— 读取屏幕上的对话，套「人设 + 记忆」生成**可复制的回复草稿**，由你过目后自己发送。可全程本地（Ollama），数据不出本机。
 
 **流程**：
 ```
@@ -18,7 +18,7 @@
 ## 一键安装
 
 ```bash
-cd AutoTalk
+cd DraftMate
 bash setup.sh                     # 建 .venv、装依赖、自检
 cp config.example.yaml config.yaml   # 复制配置模板,然后按下面填好 app_name
 ```
@@ -80,7 +80,7 @@ python selftest.py 某张聊天截图.png
 ## 目录结构
 
 ```
-AutoTalk/
+DraftMate/
   setup.sh           一键建环境 + 自检
   main.py            入口(--once / --send / --check / --snap)
   watcher.py         主循环:轮询 + 新消息检测 + 串起流程

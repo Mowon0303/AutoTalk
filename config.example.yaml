@@ -1,4 +1,4 @@
-# AutoTalk 配置模板 —— 复制为 config.yaml 后按需修改:
+# DraftMate 配置模板 —— 复制为 config.yaml 后按需修改:
 #   cp config.example.yaml config.yaml
 
 # 后端: ollama(本地,免 key、数据不出本机) 或 anthropic(云端,需 ANTHROPIC_API_KEY)

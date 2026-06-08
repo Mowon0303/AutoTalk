@@ -1,4 +1,4 @@
-"""AutoTalk 副驾(本地网页 UI)。
+"""DraftMate 副驾(本地网页 UI)。
 
 看截图 + 旁边给几条建议回复,点「复制」自己粘贴 —— 全程只读屏 + 剪贴板,
 不模拟键鼠、不自动发送,把封号风险降到最低。
@@ -127,7 +127,7 @@ PAGE = r"""<!doctype html>
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>AutoTalk</title>
+<title>DraftMate</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:wght@700;800&family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
@@ -331,7 +331,7 @@ PAGE = r"""<!doctype html>
   <header class="titlebar">
     <div class="title-center">
       <span class="logo-mark" aria-hidden="true"></span>
-      <span class="app-title">AutoTalk</span>
+      <span class="app-title">DraftMate</span>
       <span class="active-contact" id="windowContact">— 未读取</span>
     </div>
   </header>
@@ -672,7 +672,7 @@ function renderPayload(data){
 }
 async function saveContext(thenRead=false){
   if(!currentProfileTitle){
-    showError('请先读取一次对话，让 AutoTalk 知道要保存到哪个联系人。');
+    showError('请先读取一次对话，让 DraftMate 知道要保存到哪个联系人。');
     return;
   }
   els.saveContextBtn.disabled=true;
@@ -845,10 +845,10 @@ def main() -> None:
     if "--window" in sys.argv or getattr(sys, "frozen", False):   # 打包后默认走原生窗口
         import webview
         threading.Thread(target=_serve_forever, daemon=True).start()
-        webview.create_window("AutoTalk 副驾", url, width=1120, height=740, min_size=(820, 520))
+        webview.create_window("DraftMate 副驾", url, width=1120, height=740, min_size=(820, 520))
         webview.start()                 # 阻塞,直到关闭窗口
     else:                               # 浏览器模式
-        print(f"AutoTalk 副驾 → {url}(只读屏 + 复制,不自动发送)。Ctrl+C 退出。")
+        print(f"DraftMate 副驾 → {url}(只读屏 + 复制,不自动发送)。Ctrl+C 退出。")
         threading.Timer(0.8, lambda: webbrowser.open(url)).start()
         _serve_forever()
 
