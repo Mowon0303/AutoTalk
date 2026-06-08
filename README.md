@@ -81,15 +81,11 @@ python setup_app.py py2app   # 产物 dist/DraftMate.app
 ```
 DraftMate/
   copilot.py           副驾主程序:本地网页 UI + 截图预览 + 候选回复 + 复制
-  capture.py           截图 + 按窗口ID定位目标 App(不受遮挡)
-  vision.py            截图 -> 结构化消息(ocr 几何判定 或 vlm 直读)
-  chat_ocr.py          自带:OCR + 头像/几何发言人判定(ocr 模式用)
+  vision.py            读屏全链路:截图与窗口定位 + OCR/几何发言人判定 + 结构化对话
   llm.py               模型调用层(ollama / anthropic 双后端)
   agent.py             拼 prompt(人设 + 记忆 + 目标 + 对话)-> 候选回复
-  memory.py            联系人记忆:人工档案 + 手动上下文
-  persona.py           人设加载与按联系人绑定
-  config.py            配置加载与默认值
-  appdirs.py           开发态/打包态数据目录解析
+  skills.py            人设(personas)+ 联系人记忆(人工档案 + 手动上下文)
+  config.py            配置加载 + 数据目录解析(开发态 / 打包态)
   config.example.yaml  配置模板(复制为 config.yaml)
   setup.sh             一键建环境 + 自检
   make_app.sh          生成可双击的启动器(开发态用,产物不入库)

@@ -1,7 +1,8 @@
-"""把聊天截图读成结构化消息。
+"""读屏:截图 → OCR/视觉 → 结构化对话。
 
-发言人判定不让模型直接猜"谁说的"(小视觉模型常把左右判反),而是让它只给出
-每条消息的水平位置百分比 cx,再用几何规则映射:贴右=我、贴左=对方、居中=系统。
+  1) 屏幕截图与窗口定位(macOS)      —— 原 capture
+  2) OCR 后端 + 头像/几何发言人判定   —— 原 chat_ocr(已去掉其命令行入口)
+  3) 截图 → 结构化对话              —— vlm 直读 或 ocr 几何判定;发言人按位置/头像判,不让模型猜
 """
 from __future__ import annotations
 
@@ -9,12 +10,522 @@ import base64
 import json
 import os
 import re
+import subprocess
 import tempfile
 from pathlib import Path
 
 import llm
 
-# 读取模式:vlm(纯视觉模型,默认) 或 ocr(本地 OCR + 头像/几何判定,复用 vendored chat_ocr.py)
+try:
+    import numpy as np
+except Exception:
+    np = None
+try:
+    from PIL import Image
+except Exception:
+    Image = None
+
+
+# ════════════════════ 1) 屏幕截图与窗口定位(macOS)════════════════════
+
+def _osascript(script: str) -> str:
+    r = subprocess.run(["osascript", "-e", script], capture_output=True, text=True)
+    return r.stdout.strip() if r.returncode == 0 else ""
+
+
+def window_bounds(process_name: str):
+    """返回聊天软件主窗口的 (x, y, w, h);拿不到时返回 None(改为全屏截图)。"""
+    script = f'''
+    set _info to ""
+    tell application "System Events"
+        if exists process "{process_name}" then
+            tell process "{process_name}"
+                set _p to position of window 1
+                set _s to size of window 1
+                set _info to ((item 1 of _p) as string) & "," & ((item 2 of _p) as string) & "," & ((item 1 of _s) as string) & "," & ((item 2 of _s) as string)
+            end tell
+        end if
+    end tell
+    return _info
+    '''
+    out = _osascript(script)
+    if "," not in out:
+        return None
+    try:
+        x, y, w, h = (int(v) for v in out.split(","))
+    except ValueError:
+        return None
+    if w <= 0 or h <= 0:
+        return None
+    return (x, y, w, h)
+
+
+_ALIASES = []   # 目标应用的窗口属主名别名(本地化名等),由 configure() 从配置注入
+
+
+def set_app_aliases(aliases=None) -> None:
+    global _ALIASES
+    _ALIASES = [str(a).lower() for a in (aliases or []) if a]
+
+
+def _is_target_owner(owner, process_name: str) -> bool:
+    o = (owner or "").lower()
+    if not o:
+        return False
+    cands = ([process_name.lower()] if process_name else []) + _ALIASES
+    return any(c and (o == c or c in o) for c in cands)
+
+
+def window_id(process_name: str):
+    """用 Quartz 找目标应用主窗口的 CGWindowID(按窗口抓取,被遮挡也只截它自己)。
+    注意:有些应用窗口 owner 名是本地化名,不一定等于进程名,可在配置 app_aliases 里补。"""
+    try:
+        import Quartz
+    except Exception:
+        return None
+    # 先 OnScreenOnly(最适合截图);权限/沙箱拿不到时退到 All
+    for opt in (Quartz.kCGWindowListOptionOnScreenOnly, Quartz.kCGWindowListOptionAll):
+        wins = Quartz.CGWindowListCopyWindowInfo(opt, Quartz.kCGNullWindowID) or []
+        best_id, best_area = None, 0.0
+        for w in wins:
+            if not _is_target_owner(w.get("kCGWindowOwnerName"), process_name):
+                continue
+            if w.get("kCGWindowLayer", 0) != 0:        # 只要普通窗口层(排除菜单/悬浮层)
+                continue
+            b = w.get("kCGWindowBounds", {})
+            area = float(b.get("Width", 0)) * float(b.get("Height", 0))
+            if area > best_area:
+                best_area, best_id = area, int(w.get("kCGWindowNumber", 0))
+        if best_id:
+            return best_id
+    return None
+
+
+def list_window_owners() -> list:
+    """列出当前所有窗口的 owner 名(诊断用:确认聊天软件到底叫什么)。"""
+    try:
+        import Quartz
+    except Exception:
+        return []
+    wins = Quartz.CGWindowListCopyWindowInfo(Quartz.kCGWindowListOptionAll, Quartz.kCGNullWindowID) or []
+    return sorted({(w.get("kCGWindowOwnerName") or "?") for w in wins})
+
+
+def grab(process_name: str) -> str:
+    """截图(只截聊天软件窗口本身,即使被别的窗口挡住),返回临时 png 路径。调用方负责删除。"""
+    fd, path = tempfile.mkstemp(suffix=".png", prefix="draftmate_")
+    os.close(fd)
+    wid = window_id(process_name)
+    if wid:
+        # -l 按窗口 ID 抓该窗口自身内容(不受遮挡影响);-o 去掉窗口阴影
+        subprocess.run(["screencapture", "-x", "-o", "-l", str(wid), path], check=False)
+    else:
+        bounds = window_bounds(process_name)
+        if bounds:
+            x, y, w, h = bounds
+            subprocess.run(["screencapture", "-x", "-R", f"{x},{y},{w},{h}", path], check=False)
+        else:
+            subprocess.run(["screencapture", "-x", path], check=False)
+    # 截图无效(没权限时 screencapture 会失败/产出空文件)→ 明确报错,别把空图喂给模型
+    if not os.path.exists(path) or os.path.getsize(path) < 1024:
+        try:
+            os.remove(path)
+        except OSError:
+            pass
+        raise RuntimeError(
+            "截图失败:多半是终端没有「屏幕录制」权限。"
+            "去 系统设置→隐私与安全性→屏幕录制 勾上你的终端,重启终端后再试。"
+        )
+    return path
+
+
+# ════════════════════ 2) OCR 后端 + 头像/几何发言人判定 ════════════════════
+
+IMG_EXTS = (".png", ".jpg", ".jpeg", ".webp", ".bmp")
+BACKEND_ORDER = ["vision", "easyocr", "paddleocr", "tesseract"]
+_CHOSEN = None          # resolved backend name
+_PADDLE = None
+_EASY = None
+
+
+# ----------------------------------------------------------------------------- #
+# OCR backends — each returns list of lines: {"text","box":(x0,y0,x1,y1),"conf"}
+# ----------------------------------------------------------------------------- #
+def _line(text, x0, y0, x1, y1, conf):
+    return {"text": str(text), "box": (float(x0), float(y0), float(x1), float(y1)),
+            "conf": float(conf)}
+
+
+def ocr_vision(path, W, H):
+    """macOS Vision framework via pyobjc. 中文好、无需下载模型。
+    注意：在沙箱/受限环境（如某些 managed shell）Vision 请求可能建不出 CVPixelBuffer 而失败。
+    这里检查 performRequests:error: 的返回值，失败就**抛错**，绝不把'请求失败'伪装成'0 行文字'。"""
+    import Vision, Quartz
+    from Foundation import NSURL
+    src = Quartz.CGImageSourceCreateWithURL(NSURL.fileURLWithPath_(os.path.abspath(path)), None)
+    cg = Quartz.CGImageSourceCreateImageAtIndex(src, 0, None) if src else None
+    if cg is None:
+        raise RuntimeError("Vision: 无法解码图片（CGImage 为空）")
+    req = Vision.VNRecognizeTextRequest.alloc().init()
+    req.setRecognitionLevel_(0)               # 0 = accurate（支持中文）；1 = fast（偏拉丁，会把中文识成乱码）
+    req.setUsesLanguageCorrection_(True)
+    try:
+        req.setRecognitionLanguages_(["zh-Hans", "zh-Hant", "en"])
+    except Exception:
+        pass
+    handler = Vision.VNImageRequestHandler.alloc().initWithCGImage_options_(cg, None)
+    ok, err = handler.performRequests_error_([req], None)
+    if not ok:
+        raise RuntimeError(
+            "Vision 请求执行失败（此环境可能不支持，如沙箱建不出 CVPixelBuffer/420f）：%s" % err)
+    lines = []
+    for obs in (req.results() or []):
+        cand = obs.topCandidates_(1)
+        if not cand:
+            continue
+        text = cand[0].string()
+        conf = float(cand[0].confidence())
+        bb = obs.boundingBox()                # normalized, origin bottom-left
+        x = bb.origin.x * W
+        w = bb.size.width * W
+        y = (1.0 - bb.origin.y - bb.size.height) * H
+        h = bb.size.height * H
+        lines.append(_line(text, x, y, x + w, y + h, conf))
+    return lines
+
+
+def ocr_easyocr(path, W, H):
+    import easyocr
+    global _EASY
+    if _EASY is None:
+        _EASY = easyocr.Reader(["ch_sim", "en"], gpu=False)
+    out = []
+    for box, text, conf in _EASY.readtext(path):
+        xs = [p[0] for p in box]; ys = [p[1] for p in box]
+        out.append(_line(text, min(xs), min(ys), max(xs), max(ys), conf))
+    return out
+
+
+def ocr_paddleocr(path, W, H):
+    from paddleocr import PaddleOCR
+    global _PADDLE
+    if _PADDLE is None:
+        _PADDLE = PaddleOCR(use_angle_cls=True, lang="ch", show_log=False)
+    res = _PADDLE.ocr(path, cls=True)
+    out = []
+    for page in (res or []):
+        for item in (page or []):
+            box, (text, conf) = item[0], item[1]
+            xs = [p[0] for p in box]; ys = [p[1] for p in box]
+            out.append(_line(text, min(xs), min(ys), max(xs), max(ys), conf))
+    return out
+
+
+def ocr_tesseract(path, W, H):
+    import pytesseract
+    from pytesseract import Output
+    lang = os.environ.get("CHAT_OCR_TESS_LANG", "chi_sim+chi_tra+eng")
+    d = pytesseract.image_to_data(path, lang=lang, output_type=Output.DICT)  # pass path, not PIL image (avoids a Pillow decode quirk)
+    groups = {}
+    for i in range(len(d["text"])):
+        t = (d["text"][i] or "").strip()
+        c = float(d["conf"][i])
+        if not t or c < 0:
+            continue
+        key = (d["block_num"][i], d["par_num"][i], d["line_num"][i])
+        x, y, w, h = d["left"][i], d["top"][i], d["width"][i], d["height"][i]
+        groups.setdefault(key, []).append((t, x, y, x + w, y + h, c / 100.0))
+    out = []
+    for ws in groups.values():
+        text = "".join(w[0] for w in ws) if _looks_cjk(ws) else " ".join(w[0] for w in ws)
+        x0 = min(w[1] for w in ws); y0 = min(w[2] for w in ws)
+        x1 = max(w[3] for w in ws); y1 = max(w[4] for w in ws)
+        conf = sum(w[5] for w in ws) / len(ws)
+        out.append(_line(text, x0, y0, x1, y1, conf))
+    return out
+
+
+def _looks_cjk(ws):
+    s = "".join(w[0] for w in ws)
+    cjk = sum(1 for ch in s if "一" <= ch <= "鿿")
+    return cjk >= max(1, len(s) // 2)
+
+
+_BACKENDS = {"vision": ocr_vision, "easyocr": ocr_easyocr,
+             "paddleocr": ocr_paddleocr, "tesseract": ocr_tesseract}
+
+
+def run_ocr(path, backend, W, H):
+    global _CHOSEN
+    if backend != "auto":
+        try:
+            return _BACKENDS[backend](path, W, H)
+        except Exception as e:
+            raise RuntimeError(f"后端 {backend} 不可用：{type(e).__name__}: {e}\n见 references/ocr-backends.md")
+    # auto：优先用已选后端；但若它对这张图读出 0 行，自动换别的后端再试（防某后端对某些图失灵）
+    order = ([_CHOSEN] if _CHOSEN else []) + [b for b in BACKEND_ORDER if b != _CHOSEN]
+    last, ran_any = None, False
+    for b in order:
+        try:
+            lines = _BACKENDS[b](path, W, H)
+        except Exception as e:
+            last = f"{b}: {type(e).__name__}: {e}"
+            continue
+        ran_any = True
+        if lines:                       # 只采纳真读出文字的后端
+            _CHOSEN = b
+            return lines
+        last = f"{b}: 0 行"
+    if ran_any:
+        return []                       # 后端能跑但都没读出文字 → 交给上层按"OCR 失败"处理
+    raise RuntimeError(
+        "没有可用的 OCR 后端。最后 -> %s\n请先安装一个后端，见 references/ocr-backends.md" % last)
+
+
+# ----------------------------------------------------------------------------- #
+# Avatar detection — pure numpy (no cv2). Find colorful square-ish blocks in the
+# far-left / far-right margins (where Chat avatars live).
+# ----------------------------------------------------------------------------- #
+def detect_avatars(path, W, H):
+    if Image is None or np is None:
+        return []
+    try:
+        arr = np.asarray(Image.open(path).convert("RGB")).astype("int16")
+    except Exception:
+        return []
+    mx = arr.max(axis=2); mn = arr.min(axis=2)
+    colorful = (mx - mn) > 22                  # 有彩色（纯色头像/合成块/绿气泡）
+    gray = arr.mean(axis=2)
+    bk = max(6, H // 160)                       # 纹理块大小
+    Hc, Wc = (H // bk) * bk, (W // bk) * bk
+    g = gray[:Hc, :Wc].reshape(Hc // bk, bk, Wc // bk, bk)
+    tex = g.std(axis=(1, 3)) > 18              # 照片头像有纹理；扁平 UI/气泡/背景没有
+    textured = np.zeros((H, W), dtype=bool)
+    textured[:Hc, :Wc] = np.repeat(np.repeat(tex, bk, axis=0), bk, axis=1)
+    colorful = colorful | textured            # 头像 = 彩色 或 有纹理（兼顾深色模式真照片，常是哑色）
+    left_x, right_x = int(0.14 * W), int(0.86 * W)
+    avatars = []
+    for side, (xa, xb) in (("left", (0, left_x)), ("right", (right_x, W))):
+        band = colorful[:, xa:xb]
+        if band.size == 0:
+            continue
+        rowcov = band.mean(axis=1)
+        runs, s = [], None
+        for y, v in enumerate(rowcov > 0.18):
+            if v and s is None:
+                s = y
+            elif not v and s is not None:
+                runs.append((s, y)); s = None
+        if s is not None:
+            runs.append((s, len(rowcov)))
+        for y0, y1 in runs:
+            h = y1 - y0
+            if h < 0.03 * H or h > 0.16 * H:   # plausible avatar height
+                continue
+            sub = band[y0:y1]
+            cols = np.where(sub.mean(axis=0) > 0.15)[0]
+            if cols.size == 0:
+                continue
+            bx0, bx1 = xa + int(cols.min()), xa + int(cols.max())
+            w = max(bx1 - bx0, 1)
+            ar = w / h
+            if ar < 0.5 or ar > 1.8:           # roughly square
+                continue
+            cov = float(sub.mean())
+            conf = round(min(0.95, 0.45 + 0.5 * min(1.0, cov / 0.5)), 3)
+            avatars.append({"box": (bx0, int(y0), bx1, int(y1)), "side": side, "conf": conf})
+    return avatars
+
+
+def _content_mask(path, W, H, text_boxes):
+    """'视觉内容'掩码（彩色 或 有纹理），已抠掉文字与左右头像栏。给图片/表情检测用。"""
+    if Image is None or np is None:
+        return None
+    try:
+        arr = np.asarray(Image.open(path).convert("RGB")).astype("float32")
+    except Exception:
+        return None
+    chroma = (arr.max(axis=2) - arr.min(axis=2)) > 22
+    gray = arr.mean(axis=2)
+    bk = max(6, H // 160)
+    Hc, Wc = (H // bk) * bk, (W // bk) * bk
+    g = gray[:Hc, :Wc].reshape(Hc // bk, bk, Wc // bk, bk)
+    tex = np.zeros((H, W), dtype=bool)
+    tex[:Hc, :Wc] = np.repeat(np.repeat(g.std(axis=(1, 3)) > 11, bk, axis=0), bk, axis=1)
+    content = chroma | tex
+    for (x0, y0, x1, y1) in text_boxes:
+        content[max(0, int(y0)):int(y1), max(0, int(x0)):int(x1)] = False
+    content[:, :int(0.13 * W)] = False
+    content[:, int(0.88 * W):] = False
+    return content
+
+
+# ----------------------------------------------------------------------------- #
+# Bubble clustering — group OCR lines into bubbles (vertical proximity + side).
+# ----------------------------------------------------------------------------- #
+def _side(box, W):
+    return "L" if (box[0] + box[2]) / 2 < W * 0.5 else "R"
+
+
+def cluster_bubbles(lines, W, H):
+    if not lines:
+        return []
+    lines = sorted(lines, key=lambda l: (l["box"][1], l["box"][0]))
+    heights = sorted(l["box"][3] - l["box"][1] for l in lines)
+    mh = heights[len(heights) // 2] or 20.0
+    bubbles, cur = [], [lines[0]]
+    for prev, ln in zip(lines, lines[1:]):
+        gap = ln["box"][1] - prev["box"][3]
+        same = _side(ln["box"], W) == _side(cur[-1]["box"], W)
+        if gap > mh * 0.9 or not same:
+            bubbles.append(cur); cur = [ln]
+        else:
+            cur.append(ln)
+    bubbles.append(cur)
+    return bubbles
+
+
+def _bubble_box(b):
+    return (min(l["box"][0] for l in b), min(l["box"][1] for l in b),
+            max(l["box"][2] for l in b), max(l["box"][3] for l in b))
+
+
+# ----------------------------------------------------------------------------- #
+# Speaker assignment — avatar in same y-band first, bubble-center fallback.
+# ----------------------------------------------------------------------------- #
+def assign_speaker(box, avatars, W, me_side):
+    x0, y0, x1, y1 = box
+    cx, w = (x0 + x1) / 2, (x1 - x0)
+    tol = (y1 - y0) * 0.6 + 10
+    near = [a for a in avatars if y0 - tol <= (a["box"][1] + a["box"][3]) / 2 <= y1 + tol]
+    left = [a for a in near if a["side"] == "left"]
+    right = [a for a in near if a["side"] == "right"]
+    me, other = me_side, ("right" if me_side == "left" else "left")
+    # 1) 头像优先：同一 y 带内只有一侧头像
+    if left and not right:
+        return ("me" if me == "left" else "other"), 0.92, "附近左侧头像", "left"
+    if right and not left:
+        return ("me" if me == "right" else "other"), 0.92, "附近右侧头像", "right"
+    # 2) 头像失败 -> 看气泡贴哪边（比"中心 vs 屏幕中线"稳得多）
+    left_gap, right_gap = x0, W - x1
+    hugs_left, hugs_right = left_gap < W * 0.30, right_gap < W * 0.30
+    if hugs_left and not hugs_right:
+        return ("me" if me == "left" else "other"), 0.70, "无头像 fallback：气泡贴左边", None
+    if hugs_right and not hugs_left:
+        return ("me" if me == "right" else "other"), 0.70, "无头像 fallback：气泡贴右边", None
+    # 3) 居中且窄、两侧留白对称 -> 系统/时间
+    if w < W * 0.5 and abs(left_gap - right_gap) < W * 0.15:
+        return "system", 0.6, "居中且窄、两侧留白对称，疑似时间/系统提示", None
+    # 4) 兜底：用中心位置，但低置信
+    if cx < W * 0.5:
+        return ("me" if me == "left" else "other"), 0.5, "兜底：气泡偏左（低置信）", None
+    if cx > W * 0.5:
+        return ("me" if me == "right" else "other"), 0.5, "兜底：气泡偏右（低置信）", None
+    return "unknown", 0.3, "居中/信号冲突，无法判定", None
+
+
+# ----------------------------------------------------------------------------- #
+def _is_status_bar(text):
+    """像手机状态栏：只有数字/冒号/%/空格（时间 06:07、电量 76），且不含中文日期字。
+    聊天日期戳（含 年/月/日）会被保留。"""
+    t = (text or "").strip()
+    return bool(t) and bool(re.fullmatch(r"[\d:%\s]+", t)) and not any(c in t for c in "年月日")
+
+
+def image_size(path):
+    if Image is not None:
+        with Image.open(path) as im:
+            return im.size
+    raise RuntimeError("需要 Pillow 读取图片尺寸：pip install pillow")
+
+
+def process_image(path, backend, me_side, crop_top=0.0, crop_bottom=0.0):
+    W, H = image_size(path)
+    lines = run_ocr(path, backend, W, H)
+
+    # 状态栏按"内容"识别后丢弃，而不是按固定比例裁——否则没状态栏的截图首/尾消息会被误删
+    def _keep(l):
+        yc = (l["box"][1] + l["box"][3]) / 2
+        if yc < crop_top * H or yc > (1.0 - crop_bottom) * H:
+            return False
+        if yc < 0.10 * H and _is_status_bar(l["text"]):   # 顶部且只有时间/电量数字 → 状态栏
+            return False
+        return True
+    lines = [l for l in lines if _keep(l)]
+    if not lines:
+        # OCR 一个字都没读出来（深色截图/红笔标注可能干扰）——别凭头像硬塞一堆〔图片〕，老实报失败
+        return [{
+            "speaker": "unknown",
+            "text": "⚠️ 这张图没读出任何文字（深色截图 / 标注可能干扰 OCR）——换个 OCR 后端，或让带视觉的模型直接看原图",
+            "confidence": 0.2, "reason": "OCR 返回 0 行文字",
+            "avatar_side": None, "ocr_confidence": 0.0,
+            "bbox": [0, 0, int(W), int(H)], "image": os.path.basename(path),
+        }]
+    avatars = detect_avatars(path, W, H)
+    msgs = []
+    for b in cluster_bubbles(lines, W, H):
+        text = "\n".join(l["text"] for l in b).strip()
+        if not text or (len(text) <= 1 and not any("一" <= c <= "鿿" for c in text)):
+            continue   # 跳过空 / 单字符 UI 噪声（如 "+"、"V"）；单个中文字(嗯/好)保留
+        box = _bubble_box(b)
+        sp, conf, reason, av_side = assign_speaker(box, avatars, W, me_side)
+        ocr_conf = round(sum(l["conf"] for l in b) / len(b), 3)
+        if ocr_conf < 0.4:
+            conf = round(conf * 0.7, 3)
+            reason += f"；OCR 置信度低({ocr_conf})"
+        msgs.append({
+            "speaker": sp,
+            "text": text,
+            "confidence": round(conf, 3),
+            "reason": reason,
+            "avatar_side": av_side,
+            "ocr_confidence": ocr_conf,
+            "bbox": [int(round(v)) for v in box],
+            "image": os.path.basename(path),
+            "_yc": (box[1] + box[3]) / 2,
+        })
+    # 图片/表情消息：头像锚定——某侧有头像、该 y 行无文字、但确有图像内容
+    text_yc = [m["_yc"] for m in msgs]
+    content = _content_mask(path, W, H, [l["box"] for l in lines]) if avatars else None
+    xa, xb = int(0.13 * W), int(0.88 * W)
+    if content is not None:
+        for a in avatars:
+            atop = a["box"][1]
+            ah = max(a["box"][3] - a["box"][1], 20)
+            ay = atop + ah / 2
+            if any(abs(ty - ay) < ah * 0.8 for ty in text_yc):
+                continue                                    # 该行是文字消息
+            y0, y1 = int(max(0, atop - 0.3 * ah)), int(min(H, atop + 3.0 * ah))
+            band = content[y0:y1, xa:xb]
+            if band.size == 0 or float(band.mean()) < 0.05:
+                continue                                    # 没图像内容 → 伪头像，跳过
+            rows = np.where(band.mean(axis=1) > 0.06)[0]
+            cols = np.where(band.mean(axis=0) > 0.06)[0]
+            if rows.size == 0 or cols.size == 0:
+                continue
+            iy0, iy1 = y0 + int(rows.min()), y0 + int(rows.max())
+            ix0, ix1 = xa + int(cols.min()), xa + int(cols.max())
+            if (ix1 - ix0) < 0.06 * W or (iy1 - iy0) < 0.04 * H:
+                continue
+            kind = "图片" if ((ix1 - ix0) > 0.30 * W or (iy1 - iy0) > 0.13 * H) else "表情"
+            sp = "me" if a["side"] == me_side else "other"
+            msgs.append({
+                "speaker": sp, "text": f"〔{kind}〕",
+                "confidence": 0.6,
+                "reason": f"{a['side']}侧头像、该行无文字、有图像内容 → {kind}",
+                "avatar_side": a["side"], "ocr_confidence": 0.0,
+                "bbox": [ix0, iy0, ix1, iy1],
+                "image": os.path.basename(path), "_yc": (iy0 + iy1) / 2,
+            })
+    msgs.sort(key=lambda m: m["_yc"])
+    for m in msgs:
+        m.pop("_yc", None)
+    return msgs
+
+
+# ════════════════════ 3) 截图 → 结构化对话 ════════════════════
+
+# 读取模式:vlm(纯视觉模型,默认) 或 ocr(本地 OCR + 头像/几何判定)
 _MODE = {"read_mode": "vlm", "ocr_backend": "auto", "me_side": "right",
          "crop_left": 0.0, "crop_bottom": 0.0}
 
@@ -152,13 +663,11 @@ def _extract_group_names(items: list):
 
 
 def _read_via_ocr(png_path: str, last_n: int) -> dict:
-    """复用 vendored chat_ocr.py:本地 OCR + 头像/几何判定发言人(比让模型猜更稳)。"""
-    import chat_ocr  # 同目录 vendored 脚本
-
-    raw = chat_ocr.process_image(png_path, _MODE["ocr_backend"], _MODE["me_side"])
+    """本地 OCR + 头像/几何判定发言人(比让模型猜更稳)。"""
+    raw = process_image(png_path, _MODE["ocr_backend"], _MODE["me_side"])
     if any((m.get("text") or "").startswith("⚠️") for m in raw):
         raise RuntimeError("OCR 未读出文字")
-    _, img_h = chat_ocr.image_size(png_path)   # 截图高度,用于判定顶部标题栏
+    _, img_h = image_size(png_path)   # 截图高度,用于判定顶部标题栏
 
     # 顶部第一条若是居中短文本(非时间/日期)→ 当作聊天标题(手机版居中标题)
     title = None

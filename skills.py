@@ -1,15 +1,27 @@
-"""联系人记忆:人工可编辑档案(.md) + 机器维护的摘要(.summary.md)。
+"""skills:人设(personas)+ 联系人记忆(memory)的加载/存储。
 
-两者分文件存放:代码只写 .summary.md,绝不覆盖你手填的 .md。
+都读写 skills/ 下的子目录,目录位置由 config.base_dir() 决定(开发态=项目目录,
+打包态=~/Library/Application Support/DraftMate)。
 """
 from __future__ import annotations
 
 import re
 from pathlib import Path
 
-import appdirs
+import config
 
-MEM_DIR = appdirs.base_dir() / "skills" / "memory"
+
+# ════════════════════ 人设(personas)════════════════════
+PERSONA_DIR = config.base_dir() / "skills" / "personas"
+
+
+def load_persona(name: str) -> str:
+    p = PERSONA_DIR / f"{name}.md"
+    return p.read_text(encoding="utf-8") if p.exists() else ""
+
+
+# ════════════════════ 联系人记忆(人工档案 + 手动上下文)════════════════════
+MEM_DIR = config.base_dir() / "skills" / "memory"
 MANUAL_START = "<!-- autotalk:manual-context:start -->"
 MANUAL_END = "<!-- autotalk:manual-context:end -->"
 MANUAL_SECTIONS = {
@@ -118,7 +130,7 @@ def save_manual_context(title: str | None, values: dict) -> dict:
     return clean
 
 
-def load(title: str | None) -> str:
+def load_memory(title: str | None) -> str:
     """返回供 prompt 使用的记忆全文。首次见到某人会自动创建可编辑档案模板。"""
     if not title:
         return ""

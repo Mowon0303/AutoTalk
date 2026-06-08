@@ -12,6 +12,7 @@
 - py2app 打包:新增 `setup_app.py` + `appdirs.py`,可构建自包含的 `DraftMate.app`(`python setup_app.py py2app`)。打包态把用户数据(config / 记忆 / 截图)移到 `~/Library/Application Support/DraftMate`,开发态路径不变。
 
 ### Changed
+- 文件合并(功能不变,仅整理结构):`appdirs`→`config`、`capture`+`chat_ocr`→`vision`、`persona`+`memory`→`skills`;每个合并文件内用区域注释分段。源码模块 11 → 7 个。
 - 项目更名 **AutoTalk → DraftMate**:GitHub 仓库、README/界面文案、打包(`CFBundleName`、bundle id `local.draftmate.copilot`、`DraftMate.app`)、数据目录(`~/Library/Application Support/DraftMate`)、本地文件夹一并更新;内部记忆标记(`autotalk:manual-context`)保持不变以兼容已存档案。README 简介改为更中性的表述。
 - Copilot UI 重做为暖黑 + 琥珀金的「Focus」设计:三层布局(标题栏 / 状态栏 / 左截图 + 右建议)、AI 分析卡、带语气标签与「★推荐」的回复卡;加载 Bricolage Grotesque / IBM Plex 字体(离线回退系统字体)。
 - 手动上下文用持续的「目标(阶段性)」(`goal`)取代逐条输入的「我这次想表达」(`reply_intent`):设一次长期生效,agent 朝该阶段性目标循序渐进地给建议,不再要求每条都手填意图。同步更新 `agent` 回复策略、`copilot` UI 标签/占位与前后端字段。

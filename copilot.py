@@ -17,11 +17,9 @@ import webbrowser
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
 import agent
-import capture
 import config
 import llm
-import memory
-import persona
+import skills
 import vision
 
 HOST, PORT = "127.0.0.1", 8765
@@ -30,7 +28,7 @@ cfg = config.load()
 llm.configure(cfg.get("provider", "anthropic"), cfg.get("ollama_host", "http://localhost:11434"))
 vision.configure(cfg.get("read_mode", "vlm"), cfg.get("ocr_backend", "auto"),
                  cfg.get("me_side", "right"), cfg.get("crop_left", 0.0), cfg.get("crop_bottom", 0.0))
-capture.configure(cfg.get("app_aliases", []))
+vision.set_app_aliases(cfg.get("app_aliases", []))
 
 
 def _public_status() -> dict:
@@ -61,14 +59,14 @@ def _suggest_personas(title: str) -> list[str]:
     bound = (cfg.get("contacts") or {}).get(title) or cfg.get("default_persona", "serious")
     out = []
     for name in [bound, "casual", "flirty", "serious"]:
-        if name and name not in out and os.path.exists(os.path.join(persona.PERSONA_DIR, f"{name}.md")):
+        if name and name not in out and os.path.exists(os.path.join(skills.PERSONA_DIR, f"{name}.md")):
             out.append(name)
     return out[:3]
 
 
 def read_and_suggest() -> dict:
     """截图 → 读取 → 生成多条建议。返回给前端的数据。"""
-    png = capture.grab(cfg["app_name"])  # 失败会抛(权限/没装后端)
+    png = vision.grab(cfg["app_name"])  # 失败会抛(权限/没装后端)
     try:
         view, tmp = vision._apply_crop(png)
         img_b64 = base64.b64encode(open(view, "rb").read()).decode()
@@ -83,14 +81,14 @@ def read_and_suggest() -> dict:
 
     title = data.get("chat_title") or "unknown"
     msgs = data.get("messages") or []
-    profile_was_missing = not memory.profile_exists(title)
-    mem = memory.load(title)
-    manual = memory.manual_context(title)
+    profile_was_missing = not skills.profile_exists(title)
+    mem = skills.load_memory(title)
+    manual = skills.manual_context(title)
     suggestions = []
     if msgs and msgs[-1].get("sender") not in ("我", "系统", "unknown"):
         for name in _suggest_personas(title):
             try:
-                text = agent.draft_reply(msgs, persona.load(name), mem,
+                text = agent.draft_reply(msgs, skills.load_persona(name), mem,
                                          cfg["reply_model"], cfg["read_last_n"], manual)
             except SystemExit as e:
                 text = f"(生成失败: {_error_text(e)})"
@@ -108,17 +106,17 @@ def read_and_suggest() -> dict:
         "profile": {
             "title": title,
             "manual": manual,
-            "needs_input": profile_was_missing or not memory.has_manual_context(manual),
+            "needs_input": profile_was_missing or not skills.has_manual_context(manual),
         },
     }
 
 
 def regenerate_one(title: str, persona_name: str, messages: list) -> str:
     """对已显示的对话,用指定人设重新生成一条建议(复用已读消息,不重新截图)。"""
-    mem = memory.load(title)
-    manual = memory.manual_context(title)
+    mem = skills.load_memory(title)
+    manual = skills.manual_context(title)
     name = persona_name or cfg.get("default_persona", "serious")
-    return agent.draft_reply(messages, persona.load(name), mem,
+    return agent.draft_reply(messages, skills.load_persona(name), mem,
                              cfg["reply_model"], cfg["read_last_n"], manual)
 
 
@@ -820,7 +818,7 @@ class Handler(BaseHTTPRequestHandler):
             data = json.loads(self.rfile.read(n).decode("utf-8")) if n else {}
             if self.path == "/api/context":
                 title = data.get("title")
-                saved = memory.save_manual_context(title, data.get("manual") or {})
+                saved = skills.save_manual_context(title, data.get("manual") or {})
                 payload = {"ok": True, "profile": {"title": title, "manual": saved}}
             else:  # /api/regenerate
                 text = regenerate_one(data.get("title") or "unknown",
