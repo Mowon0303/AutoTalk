@@ -26,7 +26,7 @@ OPTIONS = {
     "packages": ["PIL", "webview"],
     "includes": [
         "appdirs", "agent", "capture", "chat_ocr", "config", "llm",
-        "memory", "persona", "vision", "snap",
+        "memory", "persona", "vision",
         "yaml", "objc", "proxy_tools", "bottle", "typing_extensions",
         "Foundation", "AppKit", "WebKit", "Quartz", "Vision",
     ],

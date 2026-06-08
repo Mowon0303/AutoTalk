@@ -20,6 +20,8 @@
 - `memory.load()` 现在剥掉手动上下文块,避免它在 prompt 里重复(该块已单独以最高优先级注入)。
 
 ### Removed
+- 精简为 copilot-only:删除自动发送链路与多余入口/界面 —— `main.py` / `watcher.py` / `sender.py` / `confirm.py` / `confirm.applescript`(自动发送流程)、`menubar.py`(菜单栏 App)、`doctor.py` / `snap.py` / `selftest.py`(排错/测试工具);均不被 copilot app 依赖。同步精简 `setup.sh` / `setup_app.py` / README,删除旧打包产物。
+- 清理随之失效的死代码与配置:`memory.update()`(发送后自动摘要)、`capture.file_hash()`,以及配置项 `poll_interval_seconds` / `dry_run` / `send_with` / `update_memory` / `summary_model`。
 - 去掉 profile 模板里多余的「当前目标」一行(由结构化的目标字段取代,避免两个"目标")。
 
 ## Unreleased - 2026-06-07

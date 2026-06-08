@@ -12,6 +12,7 @@ python3 -m venv .venv
 echo "==> 2/3 安装依赖"
 "$PY" -m pip install -q pyyaml            # 读配置(必装)
 "$PY" -m pip install -q pillow numpy      # OCR 模式(read_mode=ocr)
+"$PY" -m pip install -q pywebview         # 原生窗口/.app 用(浏览器模式可不装)
 if [ "$(uname)" = "Darwin" ]; then
     "$PY" -m pip install -q pyobjc-framework-Vision pyobjc-framework-Quartz  # macOS 原生 OCR,轻量免下模型
     OCR_BACKEND="vision(macOS 原生)"
@@ -48,6 +49,6 @@ cat <<'EOF'
    2) 确认 config.yaml:  provider: ollama / model: qwen2.5vl:7b / read_mode: ocr
    3) 运行:
         source .venv/bin/activate
-        python main.py --once       # 截图→OCR→草稿→确认框(dry_run 不真发)
-        # 验证 OK 后:python main.py --send   才会真正发送(先用小号)
+        python copilot.py            # 浏览器副驾:截图预览 + 建议回复 + 一键复制
+        python copilot.py --window   # 原生窗口(需 pywebview,已随本脚本装好)
 EOF

@@ -23,16 +23,11 @@ _DEFAULTS = {
     "model": "claude-sonnet-4-6",
     "vision_model": None,
     "reply_model": None,
-    "summary_model": "claude-haiku-4-5-20251001",
     "app_name": "",
     "app_aliases": [],
-    "poll_interval_seconds": 5,
     "read_last_n": 8,
-    "dry_run": True,
-    "send_with": "enter",
     "default_persona": "serious",
     "contacts": {},
-    "update_memory": True,
 }
 
 
@@ -48,6 +43,5 @@ def load(path: str | None = None) -> dict:
     # 单独指定的模型为空时回退到主模型
     cfg["vision_model"] = cfg.get("vision_model") or cfg["model"]
     cfg["reply_model"] = cfg.get("reply_model") or cfg["model"]
-    cfg["summary_model"] = cfg.get("summary_model") or cfg["model"]
     cfg["contacts"] = cfg.get("contacts") or {}
     return cfg

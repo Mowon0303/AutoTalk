@@ -1,11 +1,9 @@
 """屏幕截图与窗口定位(macOS)。"""
 from __future__ import annotations
 
-import hashlib
 import os
 import subprocess
 import tempfile
-from pathlib import Path
 
 
 def _osascript(script: str) -> str:
@@ -117,7 +115,3 @@ def grab(process_name: str) -> str:
             "去 系统设置→隐私与安全性→屏幕录制 勾上你的终端,重启终端后再试。"
         )
     return path
-
-
-def file_hash(path: str) -> str:
-    return hashlib.sha1(Path(path).read_bytes()).hexdigest()

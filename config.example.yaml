@@ -19,7 +19,6 @@ crop_bottom: 0.12      # 裁掉底部输入框/工具栏(约底 12%)
 model: qwen2.5vl:7b
 vision_model:          # 留空则用 model
 reply_model:           # 留空则用 model
-summary_model: llama3.2
 
 # —— 目标应用(必填)——
 # app_name: 目标 App 在系统里显示的应用名/进程名
@@ -27,11 +26,7 @@ summary_model: llama3.2
 app_name: ""
 app_aliases: []
 
-poll_interval_seconds: 5      # 轮询间隔(秒),别低于 3
 read_last_n: 8                # 每次读取最近多少条消息作为上下文
-dry_run: true                 # true=只弹确认框不真发;跑通后改 false 或用 --send
-send_with: enter              # enter 或 cmd_enter,取决于该 App 的发送快捷键
 
 default_persona: serious      # 默认人设(skills/personas/<名字>.md)
 contacts: {}                  # 联系人->人设映射,如 {张三: serious}
-update_memory: true           # 发送后是否自动更新该联系人记忆摘要

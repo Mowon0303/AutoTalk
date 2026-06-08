@@ -8,7 +8,6 @@ import re
 from pathlib import Path
 
 import appdirs
-import llm
 
 MEM_DIR = appdirs.base_dir() / "skills" / "memory"
 MANUAL_START = "<!-- autotalk:manual-context:start -->"
@@ -132,24 +131,3 @@ def load(title: str | None) -> str:
     if summ.exists():
         parts.append(summ.read_text(encoding="utf-8"))
     return "\n\n".join(parts).strip()
-
-
-def update(title: str | None, recent_text: str, my_reply: str, model: str) -> None:
-    """据最新一轮对话刷新自动摘要。失败不影响主流程。"""
-    if not title:
-        return
-    try:
-        sp = _summary_path(title)
-        prev = sp.read_text(encoding="utf-8") if sp.exists() else ""
-        prompt = (
-            "你在为某个聊天软件联系人维护一份简短记忆笔记(中文 markdown,150 字以内),"
-            "标题为 '## 自动摘要',记录对方近况、聊过的关键事、TA 的偏好等。\n\n"
-            f"现有笔记:\n{prev or '(空)'}\n\n"
-            f"最新一轮对话:\n{recent_text}\n我刚回复: {my_reply}\n\n"
-            "输出更新后的完整笔记(只输出 markdown 正文):"
-        )
-        new = llm.call_text(model, "你是简洁的笔记维护助手。", prompt, max_tokens=400, temperature=0.3)
-        if new:
-            sp.write_text(new.strip() + "\n", encoding="utf-8")
-    except Exception as e:  # 记忆更新失败不该中断回复流程
-        print(f"  [记忆更新跳过] {e}")
