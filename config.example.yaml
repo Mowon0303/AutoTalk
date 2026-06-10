@@ -17,16 +17,21 @@ crop_bottom: 0.12      # 裁掉底部输入框/工具栏(约底 12%)
 
 # 模型(anthropic 填 Claude 名;ollama 填模型标签,vlm 模式须为视觉模型)
 model: qwen2.5vl:7b
-vision_model:          # 留空则用 model
-reply_model:           # 留空则用 model
+vision_model:             # 留空则用 model
+reply_model: qwen2.5:7b   # 回复用文本模型(ollama pull qwen2.5:7b);留空回退 model,但视觉模型聊天明显更平
+#   质量优先的可选项:reply_model 填 claude-*(如 claude-sonnet-4-6)可单独让"回复生成"上云——
+#   只上传对话文字、不传截图,读图仍全本地;需 export ANTHROPIC_API_KEY + pip install anthropic。
+#   本地更大杆杠:16GB+ 内存可试 qwen2.5:14b(ollama pull qwen2.5:14b),中文聊天明显更灵。
 
 # —— 目标应用(必填)——
 # app_name: 目标 App 在系统里显示的应用名/进程名
 # app_aliases: 窗口属主名的别名(本地化名等);若该 App 窗口 owner 名和应用名不同,在此补上
-app_name: ""
-app_aliases: []
+# 默认桌面微信,开箱即用;换别的聊天 App 改这两项(crop_left/crop_bottom 也按需微调)
+app_name: "WeChat"
+app_aliases: [WeChat, 微信, weixin]
 
 read_last_n: 8                # 每次读取最近多少条消息作为上下文
+poll_interval_seconds: 5      # 「监控」开关开启时,每隔几秒截屏探测一次新消息(只OCR比对,不生成);别低于 3
 
-default_persona: serious      # 默认人设(skills/personas/<名字>.md)
+default_persona: serious      # 默认人设:serious / casual / flirty / shenqing(深情流)
 contacts: {}                  # 联系人->人设映射,如 {张三: serious}

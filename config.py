@@ -66,6 +66,7 @@ _DEFAULTS = {
     "app_name": "",
     "app_aliases": [],
     "read_last_n": 8,
+    "poll_interval_seconds": 5,
     "default_persona": "serious",
     "contacts": {},
 }

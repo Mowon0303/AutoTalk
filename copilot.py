@@ -10,9 +10,12 @@
 from __future__ import annotations
 
 import base64
+import datetime
 import json
 import os
+import re
 import threading
+import urllib.request
 import webbrowser
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
@@ -30,6 +33,31 @@ vision.configure(cfg.get("read_mode", "vlm"), cfg.get("ocr_backend", "auto"),
                  cfg.get("me_side", "right"), cfg.get("crop_left", 0.0), cfg.get("crop_bottom", 0.0))
 vision.set_app_aliases(cfg.get("app_aliases", []))
 
+# 仅本地的用量计数(隐私承诺内的最低成本度量):累计「读取」次数 + 最近使用日期。
+# 只写本机数据目录,无任何上报;周报靠用户自愿截图 UI 角标。
+USAGE_PATH = config.base_dir() / "usage.json"
+
+
+def _usage() -> dict:
+    try:
+        data = json.loads(USAGE_PATH.read_text(encoding="utf-8"))
+        return {"reads": int(data.get("reads", 0)),
+                "auto_reads": int(data.get("auto_reads", 0)),
+                "last_used": str(data.get("last_used", ""))}
+    except (OSError, ValueError):
+        return {"reads": 0, "auto_reads": 0, "last_used": ""}
+
+
+def _bump_usage(auto: bool = False) -> None:
+    # 手动/自动分开计:周留存指标只看手动「读取」,监控触发的不算,防止挂机刷数
+    u = _usage()
+    u["auto_reads" if auto else "reads"] += 1
+    u["last_used"] = datetime.date.today().isoformat()
+    try:
+        USAGE_PATH.write_text(json.dumps(u, ensure_ascii=False), encoding="utf-8")
+    except OSError:
+        pass
+
 
 def _public_status() -> dict:
     """Return non-secret runtime facts for the local UI."""
@@ -42,7 +70,9 @@ def _public_status() -> dict:
         "reply_model": cfg.get("reply_model", ""),
         "default_persona": cfg.get("default_persona", ""),
         "read_last_n": cfg.get("read_last_n", 0),
+        "poll_interval_seconds": cfg.get("poll_interval_seconds", 5),
         "copy_only": True,
+        "usage": _usage(),
     }
 
 
@@ -64,8 +94,8 @@ def _suggest_personas(title: str) -> list[str]:
     return out[:3]
 
 
-def read_and_suggest() -> dict:
-    """截图 → 读取 → 生成多条建议。返回给前端的数据。"""
+def read_and_suggest(auto: bool = False) -> dict:
+    """截图 → 读取 → 生成多条建议。返回给前端的数据。auto=监控触发(计数分开记)。"""
     png = vision.grab(cfg["app_name"])  # 失败会抛(权限/没装后端)
     try:
         view, tmp = vision._apply_crop(png)
@@ -79,6 +109,7 @@ def read_and_suggest() -> dict:
                 except OSError:
                     pass
 
+    _bump_usage(auto=auto)
     title = data.get("chat_title") or "unknown"
     msgs = data.get("messages") or []
     profile_was_missing = not skills.profile_exists(title)
@@ -89,7 +120,8 @@ def read_and_suggest() -> dict:
         for name in _suggest_personas(title):
             try:
                 text = agent.draft_reply(msgs, skills.load_persona(name), mem,
-                                         cfg["reply_model"], cfg["read_last_n"], manual)
+                                         cfg["reply_model"], cfg["read_last_n"], manual,
+                                         temperature=agent.temperature_for(name))
             except SystemExit as e:
                 text = f"(生成失败: {_error_text(e)})"
             except Exception as e:
@@ -111,13 +143,71 @@ def read_and_suggest() -> dict:
     }
 
 
+def peek() -> dict:
+    """监控用的轻量探测:截图 + OCR 读取,不生成回复。返回最后一条非系统消息的指纹,
+    前端比对指纹变化且新消息来自对方时,才触发一次完整读取。"""
+    png = vision.grab(cfg["app_name"])
+    try:
+        data = vision.read_messages(png, cfg["vision_model"], cfg["read_last_n"])
+    finally:
+        try:
+            os.remove(png)
+        except OSError:
+            pass
+    msgs = data.get("messages") or []
+    last = next((m for m in reversed(msgs) if m.get("sender") != "系统"), None) or {}
+    return {"title": data.get("chat_title") or "unknown",
+            "last_sender": last.get("sender", ""),
+            "last_text": last.get("text", "")}
+
+
+def list_models() -> dict:
+    """可选回复模型 = 本地 Ollama 已 pull 的全部模型;当前值不在列表时(如 claude-*)也带上。"""
+    names: list[str] = []
+    try:
+        url = cfg.get("ollama_host", "http://localhost:11434").rstrip("/") + "/api/tags"
+        with urllib.request.urlopen(url, timeout=5) as r:
+            data = json.loads(r.read().decode("utf-8"))
+        names = sorted({m.get("name", "") for m in data.get("models", []) if m.get("name")})
+    except Exception:
+        names = []
+    current = cfg.get("reply_model") or ""
+    if current and current not in names:
+        names.insert(0, current)
+    return {"models": names, "reply_model": current, "vision_model": cfg.get("vision_model") or ""}
+
+
+def set_reply_model(name: str) -> None:
+    """切换回复模型:内存立即生效,并只改写 config.yaml 的 reply_model 一行(注释与其余内容保留)。"""
+    cfg["reply_model"] = name
+    p = config.base_dir() / "config.yaml"
+    try:
+        text = p.read_text(encoding="utf-8") if p.exists() else ""
+    except OSError:
+        return
+    line = f"reply_model: {name}"
+    if re.search(r"(?m)^reply_model\s*:", text):
+        new = re.sub(
+            r"(?m)^reply_model\s*:[^#\n]*(#.*)?$",
+            lambda m: line + (f"   {m.group(1)}" if m.group(1) else ""),
+            text,
+        )
+    else:
+        new = text.rstrip("\n") + f"\n{line}\n"
+    try:
+        p.write_text(new, encoding="utf-8")
+    except OSError:
+        pass
+
+
 def regenerate_one(title: str, persona_name: str, messages: list) -> str:
     """对已显示的对话,用指定人设重新生成一条建议(复用已读消息,不重新截图)。"""
     mem = skills.load_memory(title)
     manual = skills.manual_context(title)
     name = persona_name or cfg.get("default_persona", "serious")
     return agent.draft_reply(messages, skills.load_persona(name), mem,
-                             cfg["reply_model"], cfg["read_last_n"], manual)
+                             cfg["reply_model"], cfg["read_last_n"], manual,
+                             temperature=agent.temperature_for(name, regen=True))
 
 
 PAGE = r"""<!doctype html>
@@ -209,6 +299,11 @@ PAGE = r"""<!doctype html>
   .runtime-grid{display:grid;grid-template-columns:1fr;gap:8px}
   .runtime-row{display:flex;align-items:center;justify-content:space-between;gap:18px;padding:9px 10px;border-radius:10px;border:1px solid var(--border);background:var(--bg3);font:500 11.5px/1.2 var(--mono);color:var(--text-dim)}
   .runtime-row strong{color:var(--text);font-weight:700;text-align:right;word-break:break-word}
+  .model-list{display:grid;gap:8px;max-height:280px;overflow:auto}
+  .model-row{display:flex;align-items:center;justify-content:space-between;gap:18px;padding:9px 10px;border-radius:10px;border:1px solid var(--border);background:var(--bg3);font:500 11.5px/1.2 var(--mono);color:var(--text-dim);cursor:pointer;width:100%;text-align:left}
+  .model-row:hover{color:var(--text);border-color:var(--text-faint)}
+  .model-row.active{color:var(--text);border-color:var(--accent)}
+  .model-row.active::after{content:"✓";color:var(--accent);font-weight:700}
   .context-head{display:flex;align-items:center;justify-content:space-between;gap:14px;margin-bottom:12px;color:var(--text)}
   .context-head strong{font:700 13px/1 var(--display)}
   .context-state{font:500 11px/1 var(--mono);color:var(--text-faint);white-space:nowrap}
@@ -336,16 +431,16 @@ PAGE = r"""<!doctype html>
 
   <section class="statusbar">
     <div class="status-left">
-      <div class="run-pill paused" id="runPill">
+      <div class="run-pill paused" id="runPill" title="盯着当前打开的对话:每隔几秒截屏比对,这个会话里对方发新消息就自动出草稿。想盯谁,先点开谁的聊天(没点开的会话读不到)。全程只读屏,不输入、不发送。">
         <span class="run-dot-wrap"><span class="run-dot"></span><span class="run-dot-pulse"></span></span>
         <span class="run-label" id="runLabel">未监控</span>
-        <button class="pause-btn" id="pauseBtn" type="button" title="开始监听" onclick="toggleRunning()">
+        <button class="pause-btn" id="pauseBtn" type="button" title="开始监控" onclick="toggleRunning()">
           <svg id="monitorIcon" width="13" height="13" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M8 5.5v13l10-6.5z"/></svg>
         </button>
       </div>
       <div class="v-divider"></div>
       <div class="listen-group">
-        <span class="mono-label">监听</span>
+        <span class="mono-label">当前</span>
         <span class="mini-avatar" id="contactAvatar">?</span>
         <span class="listen-name" id="contactName">等待读取</span>
       </div>
@@ -354,12 +449,16 @@ PAGE = r"""<!doctype html>
     <div class="status-right">
       <span class="status-chip" id="captureChip">
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><path d="M3 8.5A1.5 1.5 0 0 1 4.5 7h2L8 5h8l1.5 2h2A1.5 1.5 0 0 1 21 8.5v9A1.5 1.5 0 0 1 19.5 19h-15A1.5 1.5 0 0 1 3 17.5z"/><circle cx="12" cy="13" r="3.2"/></svg>
-        <span id="captureModeText">自动截图</span><strong>5s</strong>
+        <span id="captureModeText">手动读取</span>
       </span>
+      <span class="status-chip" id="usageChip" title="仅本地统计,不上传;周报截图发群即可">已读取 0 次</span>
       <span class="status-chip"><span class="ok-dot"></span><span>已连接</span></span>
-      <details class="model-menu">
+      <details class="model-menu" ontoggle="if(this.open)loadModels()">
         <summary class="menu-summary"><span>模型</span><strong id="modelName">读取中</strong><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M6 9l6 6 6-6"/></svg></summary>
-        <div class="menu-panel"><div class="runtime-grid" id="runtimePills"></div></div>
+        <div class="menu-panel">
+          <div class="context-head"><strong>回复模型</strong><span class="context-state" id="modelHint">点选即切换,写回配置</span></div>
+          <div class="model-list" id="modelList"><div class="empty-state">读取中</div></div>
+        </div>
       </details>
       <details class="settings">
         <summary class="icon-chip" title="上下文和设置"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M12 2.5v3M12 18.5v3M21.5 12h-3M5.5 12h-3M18.4 5.6l-2.1 2.1M7.7 16.3l-2.1 2.1M18.4 18.4l-2.1-2.1M7.7 7.7 5.6 5.6"/></svg></summary>
@@ -394,6 +493,8 @@ PAGE = r"""<!doctype html>
             <button class="ghost-btn" id="saveReadBtn" type="button" onclick="saveContext(true)">保存并重生</button>
             <span class="save-note" id="saveNote"></span>
           </div>
+          <div class="context-head" style="margin-top:14px"><strong>运行信息</strong></div>
+          <div class="runtime-grid" id="runtimePills"></div>
         </div>
       </details>
       <button class="read-btn" id="readBtn" type="button" onclick="readNow()"><span class="spin"></span><span id="readLabel">读取</span></button>
@@ -490,7 +591,10 @@ const els={
   contactName:document.getElementById('contactName'),
   contactAvatar:document.getElementById('contactAvatar'),
   modelName:document.getElementById('modelName'),
+  modelList:document.getElementById('modelList'),
+  modelHint:document.getElementById('modelHint'),
   captureModeText:document.getElementById('captureModeText'),
+  usageChip:document.getElementById('usageChip'),
   analysisText:document.getElementById('analysisText'),
   runPill:document.getElementById('runPill'),
   runLabel:document.getElementById('runLabel'),
@@ -501,6 +605,10 @@ let currentProfileTitle='';
 let lastMessages=[];
 let lastTitle='';
 let running=false;
+let lastStatus=null;
+let monitorTimer=null;
+let lastSeen='';
+let readingNow=false;
 function esc(value){
   return String(value ?? '').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 }
@@ -510,36 +618,104 @@ function icon(name){
   return '';
 }
 function setBusy(isBusy){
+  readingNow=isBusy;
   els.readBtn.disabled=isBusy;
   els.readBtn.classList.toggle('loading',isBusy);
   els.readLabel.textContent=isBusy?'读取中':'读取';
   if(isBusy)els.statusText.textContent='读取和生成中';
+  renderCaptureState();
 }
 function showError(text){
   els.errorBox.style.display=text?'block':'none';
   els.errorBox.textContent=text || '';
 }
+function renderCaptureState(){
+  // 优先级:读取中 > 监控中 > 待命
+  if(readingNow){els.imageState.className='rec';els.imageState.innerHTML='<span class="rec-dot"></span>读取中';}
+  else if(running){els.imageState.className='rec';els.imageState.innerHTML='<span class="rec-dot"></span>监控中';}
+  else{els.imageState.className='rec idle';els.imageState.innerHTML='<span class="rec-dot"></span>待命';}
+}
 function renderMonitorState(){
   els.runPill.classList.toggle('paused',!running);
-  els.runLabel.textContent=running?'运行中':'未监控';
-  els.pauseBtn.title=running?'暂停监听':'开始监听';
+  els.runLabel.textContent=running?'监控中':'未监控';
+  els.pauseBtn.title=running?'停止监控':'开始监控';
   els.monitorIcon.outerHTML=running
     ? '<svg id="monitorIcon" width="13" height="13" viewBox="0 0 24 24" fill="none" aria-hidden="true"><rect x="6" y="5" width="4" height="14" rx="1" fill="currentColor"/><rect x="14" y="5" width="4" height="14" rx="1" fill="currentColor"/></svg>'
     : '<svg id="monitorIcon" width="13" height="13" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M8 5.5v13l10-6.5z"/></svg>';
   els.monitorIcon=document.getElementById('monitorIcon');
-  els.imageState.className=running?'rec':'rec idle';
-  els.imageState.innerHTML=running?'<span class="rec-dot"></span>REC':'<span class="rec-dot"></span>待命';
+  renderCaptureState();
+}
+function pollIntervalMs(){
+  return Math.max(3,(lastStatus&&lastStatus.poll_interval_seconds)||5)*1000;
+}
+function scheduleMonitor(delayMs){
+  if(!running)return;
+  clearTimeout(monitorTimer);
+  monitorTimer=setTimeout(monitorTick,delayMs);
+}
+function syncSeenFromRead(){
+  const lm=lastMessages[lastMessages.length-1]||{};
+  lastSeen=`${lastTitle}|${lm.sender||''}|${lm.text||''}`;
+}
+async function monitorTick(){
+  if(!running)return;
+  if(readingNow){scheduleMonitor(pollIntervalMs());return;}  // 正在读取,跳过本轮
+  try{
+    const res=await fetch('/api/peek',{cache:'no-store'});
+    const data=await res.json();
+    const now=new Date().toLocaleTimeString();
+    if(data.error){
+      els.statusText.textContent=`监控探测失败 · ${now} · ${data.error}`;
+    }else{
+      const sig=`${data.title}|${data.last_sender}|${data.last_text}`;
+      const fromOther=data.last_sender&&data.last_sender!=='我'&&data.last_sender!=='系统'&&data.last_sender!=='unknown';
+      if(!lastSeen){
+        lastSeen=sig;
+        if(fromOther){
+          // 开启监控时屏幕上就有对方的未回消息 → 立刻先出一版草稿
+          els.statusText.textContent=`监控中 · 「${data.title}」有未回消息,先出一版草稿`;
+          await readNow(true);
+          syncSeenFromRead();
+        }else{
+          els.statusText.textContent=`监控中 · 已盯上当前对话「${data.title}」,对方在这个会话发新消息会自动出草稿`;
+        }
+      }else if(sig!==lastSeen&&fromOther){
+        await readNow(true);
+        syncSeenFromRead();
+      }else{
+        lastSeen=sig;
+        els.statusText.textContent=`监控中 · ${now} 已探测,无新消息`;
+      }
+    }
+  }catch(err){
+    els.statusText.textContent='监控探测失败: '+String(err);
+  }
+  scheduleMonitor(pollIntervalMs());
 }
 function toggleRunning(){
   running=!running;
+  if(running){
+    lastSeen='';            // 开启时先记基线,不为旧消息触发生成
+    scheduleMonitor(200);
+  }else{
+    clearTimeout(monitorTimer);
+    monitorTimer=null;
+  }
   renderMonitorState();
-  els.statusText.textContent=running?'监听已开启':'监听已停止';
+  els.statusText.textContent=running?`监控已开启 · 每 ${pollIntervalMs()/1000}s 探测一次(只读屏,不发送)`:'监控已停止';
 }
 function renderRuntime(status){
   if(!status)return;
+  lastStatus=status;
   const mode=status.read_mode==='ocr' ? `ocr/${status.ocr_backend || 'auto'}` : (status.read_mode || 'vlm');
   els.modelName.textContent=status.reply_model || '未配置';
   els.captureModeText.textContent=mode || '截图模式';
+  if(status.usage){
+    const u=status.usage;
+    const recent=u.last_used?` · 最近 ${esc(String(u.last_used).slice(5))}`:'';
+    const auto=Number(u.auto_reads)||0;
+    els.usageChip.innerHTML=`已读取 <strong>${Number(u.reads)||0}</strong> 次${auto?` (自动 ${auto})`:''}${recent}`;
+  }
   const rows=[
     ['目标 App',status.app_name || '未配置'],
     ['Provider',status.provider || ''],
@@ -548,9 +724,49 @@ function renderRuntime(status){
     ['回复模型',status.reply_model || ''],
     ['默认人设',status.default_persona || ''],
     ['上下文',`${status.read_last_n || 0} 条`],
+    ['监控轮询',`${status.poll_interval_seconds || 5}s`],
     ['输出',status.copy_only ? '复制/手动粘贴' : '发送']
   ];
   els.runtimePills.innerHTML=rows.map(([k,v])=>`<div class="runtime-row"><span>${esc(k)}</span><strong>${esc(v)}</strong></div>`).join('');
+}
+async function loadModels(){
+  try{
+    const res=await fetch('/api/models',{cache:'no-store'});
+    renderModelList(await res.json());
+  }catch(_){
+    els.modelList.innerHTML='<div class="empty-state">读取模型列表失败</div>';
+  }
+}
+function renderModelList(data){
+  const models=(data&&data.models)||[];
+  if(!models.length){
+    els.modelList.innerHTML='<div class="empty-state">没找到本地模型。确认 Ollama 已启动,或 ollama pull 一个模型。</div>';
+    return;
+  }
+  els.modelList.innerHTML=models.map(m=>
+    `<button type="button" class="model-row ${m===data.reply_model?'active':''}" data-model="${esc(m)}" onclick="pickModel(this)"><span>${esc(m)}</span></button>`
+  ).join('');
+}
+async function pickModel(btn){
+  const name=btn.getAttribute('data-model');
+  if(!name||((lastStatus&&lastStatus.reply_model)===name))return;
+  els.modelHint.textContent='切换中';
+  try{
+    const res=await fetch('/api/model',{
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({reply_model:name})
+    });
+    const data=await res.json();
+    if(data.error){showError('切换模型失败: '+data.error);els.modelHint.textContent='切换失败';return;}
+    renderRuntime(data.status);
+    els.modelList.querySelectorAll('.model-row').forEach(b=>b.classList.toggle('active',b.getAttribute('data-model')===name));
+    els.modelHint.textContent='已切换并写回配置';
+    showError('');
+  }catch(err){
+    showError('切换模型失败: '+String(err));
+    els.modelHint.textContent='切换失败';
+  }
 }
 function manualValues(){
   return {
@@ -590,7 +806,7 @@ function renderMessages(messages){
   }).join('');
 }
 function tagText(persona,index){
-  const map={serious:['正式','稳妥'],casual:['简短','高效'],flirty:['亲和','幽默'],tongjincheng:['强势','推进']};
+  const map={serious:['正式','稳妥'],casual:['简短','高效'],flirty:['亲和','幽默'],shenqing:['走心','推进']};
   return map[persona] || (index===0?['推荐','稳妥']:['候选','自然']);
 }
 function resizeSuggestion(el){
@@ -702,11 +918,11 @@ async function saveContext(thenRead=false){
     setTimeout(()=>{ if(els.saveNote.textContent==='已保存') els.saveNote.textContent=''; },1600);
   }
 }
-async function readNow(){
+async function readNow(auto=false){
   setBusy(true);
   showError('');
   try{
-    const res=await fetch('/api/read',{cache:'no-store'});
+    const res=await fetch('/api/read'+(auto?'?auto=1':''),{cache:'no-store'});
     const data=await res.json();
     if(data.error){
       renderRuntime(data.status);
@@ -791,26 +1007,39 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
+    def _json(self, payload) -> None:
+        self._send(200, "application/json; charset=utf-8",
+                   json.dumps(payload, ensure_ascii=False).encode("utf-8"))
+
     def do_GET(self):
-        if self.path == "/":
+        path, _, query = self.path.partition("?")
+        if path == "/":
             self._send(200, "text/html; charset=utf-8", PAGE.encode("utf-8"))
-        elif self.path == "/api/status":
-            self._send(200, "application/json; charset=utf-8",
-                       json.dumps(_public_status(), ensure_ascii=False).encode("utf-8"))
-        elif self.path == "/api/read":
+        elif path == "/api/status":
+            self._json(_public_status())
+        elif path == "/api/models":
+            self._json(list_models())
+        elif path == "/api/peek":
             try:
-                payload = read_and_suggest()
+                payload = peek()
+            except SystemExit as e:
+                payload = {"error": _error_text(e)}
+            except Exception as e:
+                payload = {"error": str(e)}
+            self._json(payload)
+        elif path == "/api/read":
+            try:
+                payload = read_and_suggest(auto="auto=1" in query)
             except SystemExit as e:
                 payload = {"error": _error_text(e), "status": _public_status()}
             except Exception as e:
                 payload = {"error": str(e), "status": _public_status()}
-            self._send(200, "application/json; charset=utf-8",
-                       json.dumps(payload, ensure_ascii=False).encode("utf-8"))
+            self._json(payload)
         else:
             self._send(404, "text/plain", b"not found")
 
     def do_POST(self):
-        if self.path not in ("/api/context", "/api/regenerate"):
+        if self.path not in ("/api/context", "/api/regenerate", "/api/model"):
             self._send(404, "text/plain", b"not found")
             return
         try:
@@ -820,6 +1049,12 @@ class Handler(BaseHTTPRequestHandler):
                 title = data.get("title")
                 saved = skills.save_manual_context(title, data.get("manual") or {})
                 payload = {"ok": True, "profile": {"title": title, "manual": saved}}
+            elif self.path == "/api/model":
+                name = (data.get("reply_model") or "").strip()
+                if not name:
+                    raise ValueError("缺少模型名")
+                set_reply_model(name)
+                payload = {"ok": True, "status": _public_status()}
             else:  # /api/regenerate
                 text = regenerate_one(data.get("title") or "unknown",
                                       data.get("persona") or "", data.get("messages") or [])
