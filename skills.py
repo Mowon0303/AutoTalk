@@ -16,8 +16,12 @@ PERSONA_DIR = config.base_dir() / "skills" / "personas"
 
 
 def load_persona(name: str) -> str:
-    p = PERSONA_DIR / f"{name}.md"
-    return p.read_text(encoding="utf-8") if p.exists() else ""
+    # .local.md = 本地私有人设(不入 git、不入分发包),同名时优先公开版
+    for suffix in (".md", ".local.md"):
+        p = PERSONA_DIR / f"{name}{suffix}"
+        if p.exists():
+            return p.read_text(encoding="utf-8")
+    return ""
 
 
 # ════════════════════ 联系人记忆(人工档案 + 手动上下文)════════════════════

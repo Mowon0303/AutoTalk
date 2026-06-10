@@ -18,7 +18,9 @@ APP = ["copilot.py"]
 
 DATA_FILES = [
     ("", ["config.example.yaml"]),
-    ("skills/personas", glob.glob("skills/personas/*.md")),
+    # *.local.md 为本地私有人设(如真名版),永不进分发包
+    ("skills/personas", [p for p in glob.glob("skills/personas/*.md")
+                         if not p.endswith(".local.md")]),
 ]
 
 OPTIONS = {

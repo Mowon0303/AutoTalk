@@ -22,3 +22,12 @@ design/
 last_capture.png
 skills/memory/*.md
 skills/memory/*.summary.md
+
+# 本地私有人设(真名版):不入库、不入分发包(打包同样排除 *.local.md)
+skills/personas/*.local.md
+
+# 本地用量计数(仅本机,无遥测)
+usage.json
+
+# 种子用户指标记录(含真实姓名)
+指标记录.md

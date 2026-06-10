@@ -91,13 +91,13 @@ DraftMate/
   make_app.sh          生成可双击的启动器(开发态用,产物不入库)
   setup_app.py         py2app 打包配置(自包含 .app)
   skills/
-    personas/          人设:serious / flirty / casual / tongjincheng
+    personas/          人设:serious / flirty / casual / shenqing(深情流)
     memory/            每个联系人一个档案(运行时生成,不入库)
 ```
 
 ## 加 skill
 
-- **加人设**:在 `skills/personas/` 丢个 `xxx.md`(写清"什么语气")。生效方式:全局 `default_persona: xxx`,或按联系人 `contacts: {会话名: xxx}`,或在 `skills/memory/<名字>.md` 写 `人设: xxx`。
+- **加人设**:在 `skills/personas/` 丢个 `xxx.md`(写清"什么语气")。生效方式:全局 `default_persona: xxx`,或按联系人 `contacts: {会话名: xxx}`,或在 `skills/memory/<名字>.md` 写 `人设: xxx`。文件名以 `.local.md` 结尾的人设只在本机生效(不进 git、不进打包),适合放私人版本。
 - **调记忆**:联系人首次出现会自动生成 `skills/memory/<名字>.md`,手填关系/偏好/阶段性目标,代码不覆盖。
 
 ## 已知限制 & 风险
