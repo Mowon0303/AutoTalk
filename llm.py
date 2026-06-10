@@ -15,10 +15,18 @@ def configure(provider: str, ollama_host: str = "http://localhost:11434") -> Non
 
 # ---------- 对外接口 ----------
 
+def _backend(model: str) -> str:
+    """按模型名路由:claude* 走 Anthropic,其余按全局 provider。
+    这样 reply_model 可单独填 claude-* 让"回复生成"上云(只传对话文字),读图仍全本地。"""
+    if (model or "").lower().startswith("claude"):
+        return "anthropic"
+    return _CONF["provider"]
+
+
 def call_text(model: str, system: str, user: str, max_tokens: int = 1024,
               temperature: float = 0.7) -> str:
     """纯文本调用。"""
-    if _CONF["provider"] == "ollama":
+    if _backend(model) == "ollama":
         return _ollama_chat(model, system, user, None, max_tokens, temperature)
     return _anthropic(model, system, [{"role": "user", "content": user}], max_tokens, temperature)
 
@@ -26,7 +34,7 @@ def call_text(model: str, system: str, user: str, max_tokens: int = 1024,
 def call_vision(model: str, system: str, user: str, image_b64: str, max_tokens: int = 1024,
                 temperature: float = 0.2) -> str:
     """带一张图片的多模态调用。image_b64 为不带前缀的 base64 PNG。"""
-    if _CONF["provider"] == "ollama":
+    if _backend(model) == "ollama":
         return _ollama_chat(model, system, user, image_b64, max_tokens, temperature)
     content = [
         {"type": "image",
