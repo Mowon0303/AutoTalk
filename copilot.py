@@ -115,13 +115,21 @@ def read_and_suggest(auto: bool = False) -> dict:
     profile_was_missing = not skills.profile_exists(title)
     mem = skills.load_memory(title)
     manual = skills.manual_context(title)
+    analysis = ""
+    if msgs:
+        try:  # 军师层:先判阶段,失败不挡草稿生成
+            analysis = agent.assess_stage(msgs, mem, cfg["reply_model"],
+                                          cfg["read_last_n"], manual).strip()
+        except Exception:
+            analysis = ""
     suggestions = []
     if msgs and msgs[-1].get("sender") not in ("我", "系统", "unknown"):
         for name in _suggest_personas(title):
             try:
                 text = agent.draft_reply(msgs, skills.load_persona(name), mem,
                                          cfg["reply_model"], cfg["read_last_n"], manual,
-                                         temperature=agent.temperature_for(name))
+                                         temperature=agent.temperature_for(name),
+                                         stage_hint=analysis)
             except SystemExit as e:
                 text = f"(生成失败: {_error_text(e)})"
             except Exception as e:
@@ -133,6 +141,7 @@ def read_and_suggest(auto: bool = False) -> dict:
         "is_group": bool(data.get("is_group")),
         "messages": msgs,
         "suggestions": suggestions,
+        "analysis": analysis,
         "note": "" if suggestions else "最后一条不是对方发的(或没读到对方消息),不出建议。",
         "status": _public_status(),
         "profile": {
@@ -200,14 +209,15 @@ def set_reply_model(name: str) -> None:
         pass
 
 
-def regenerate_one(title: str, persona_name: str, messages: list) -> str:
-    """对已显示的对话,用指定人设重新生成一条建议(复用已读消息,不重新截图)。"""
+def regenerate_one(title: str, persona_name: str, messages: list, analysis: str = "") -> str:
+    """对已显示的对话,用指定人设重新生成一条建议(复用已读消息和军师判定,不重新截图)。"""
     mem = skills.load_memory(title)
     manual = skills.manual_context(title)
     name = persona_name or cfg.get("default_persona", "serious")
     return agent.draft_reply(messages, skills.load_persona(name), mem,
                              cfg["reply_model"], cfg["read_last_n"], manual,
-                             temperature=agent.temperature_for(name, regen=True))
+                             temperature=agent.temperature_for(name, regen=True),
+                             stage_hint=analysis)
 
 
 PAGE = r"""<!doctype html>
@@ -304,6 +314,7 @@ PAGE = r"""<!doctype html>
   .model-row:hover{color:var(--text);border-color:var(--text-faint)}
   .model-row.active{color:var(--text);border-color:var(--accent)}
   .model-row.active::after{content:"✓";color:var(--accent);font-weight:700}
+  .analysis-text{white-space:pre-line}
   .context-head{display:flex;align-items:center;justify-content:space-between;gap:14px;margin-bottom:12px;color:var(--text)}
   .context-head strong{font:700 13px/1 var(--display)}
   .context-state{font:500 11px/1 var(--mono);color:var(--text-faint);white-space:nowrap}
@@ -604,6 +615,7 @@ const els={
 let currentProfileTitle='';
 let lastMessages=[];
 let lastTitle='';
+let lastAnalysis='';
 let running=false;
 let lastStatus=null;
 let monitorTimer=null;
@@ -874,7 +886,8 @@ function renderPayload(data){
   renderProfile(data.profile);
   renderMessages(messages);
   renderSuggestions(suggestions,data.note);
-  els.analysisText.textContent=analysisFrom(messages,data.profile,suggestions);
+  lastAnalysis=data.analysis||'';
+  els.analysisText.textContent=lastAnalysis||analysisFrom(messages,data.profile,suggestions);
   els.statusText.textContent=`${new Date().toLocaleTimeString()} · 生成完成`;
   if(data.image){
     els.shot.src='data:image/png;base64,'+data.image;
@@ -966,7 +979,7 @@ async function regenOne(index,button){
     const res=await fetch('/api/regenerate',{
       method:'POST',
       headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({title:lastTitle,persona:persona,messages:lastMessages})
+      body:JSON.stringify({title:lastTitle,persona:persona,messages:lastMessages,analysis:lastAnalysis})
     });
     const data=await res.json();
     if(data.error){showError('再生成失败: '+data.error);}
@@ -1057,7 +1070,8 @@ class Handler(BaseHTTPRequestHandler):
                 payload = {"ok": True, "status": _public_status()}
             else:  # /api/regenerate
                 text = regenerate_one(data.get("title") or "unknown",
-                                      data.get("persona") or "", data.get("messages") or [])
+                                      data.get("persona") or "", data.get("messages") or [],
+                                      data.get("analysis") or "")
                 payload = {"text": text}
         except SystemExit as e:
             payload = {"ok": False, "error": _error_text(e)}

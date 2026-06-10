@@ -30,6 +30,42 @@ def temperature_for(persona_name: str, regen: bool = False) -> float:
     return min(1.0, t + 0.15) if regen else t
 
 
+# 军师层:关系阶段判定规则,蒸馏自 13 项研究的阶段判定法(L0–L5/D1/D2)。
+# 原则:两类独立证据才升级、拿不准取更低一级、只引用对话里真实出现的内容。
+_STAGE_RUBRIC = (
+    "你是恋爱/暧昧聊天的军师,从对话证据估计当前关系阶段,再给下一步方向。八个等级:\n"
+    "- L0 弱连接:只有问候/事务,无跟进、无记忆\n"
+    "- L1 初步兴趣:背景问答(学校/工作/兴趣),双向但浅\n"
+    "- L2 熟悉/轻度暧昧:双方都会主动、记得旧细节、有内梗、说过'改天约'类软计划\n"
+    "- L3 情感亲近/强暧昧:一方分享脆弱(压力/不安/期望)且对方接住(理解·关心·跟进),并且双向\n"
+    "- L4 约会/关系协商:有具体的一对一约会计划、直说浪漫意图、或谈'我们算什么'\n"
+    "- L5 确定关系:明确身份/排他承诺,加上维护或修复行为\n"
+    "- D1 降温:比之前明显变冷(主动变少/回复变短/回避情感话题和计划)\n"
+    "- D2 风险:强烈情话叠加施压/控制/查岗/不接受拒绝\n"
+    "判定规则:\n"
+    "- 高于 L1 至少需要两类独立证据;拿不准就取更低一级并说还缺什么\n"
+    "- 秒回和表情是弱证据;暖心支持不等于浪漫;随口的'我们'不等于承诺\n"
+    "- 只引用对话里真实出现的内容,绝不脑补画面外的事\n"
+    "- 对话明显不是恋爱/暧昧语境(同事/事务/家人)时,阶段行写「不适用(非恋爱语境)」,策略行照常给一句沟通建议\n"
+    "输出格式(恰好三行,每行一句,不要标题不要多余文字):\n"
+    "阶段: <标签+中文名>(置信度 低/中/高)\n"
+    "依据: <引用 1-2 个对话片段说明为什么>\n"
+    "策略: <与该阶段匹配的下一步方向,留有拒绝空间,别用力过猛;只描述方向,禁止写示例句、禁止引号台词>"
+)
+
+
+def assess_stage(messages, memory_text: str, model: str, last_n: int = 8,
+                 manual_context: dict | None = None) -> str:
+    """军师判定:估计关系阶段 + 下一步方向。低温短输出,供 UI 展示并喂给草稿生成校准火候。"""
+    convo = render(messages, last_n)
+    system = (
+        f"{_STAGE_RUBRIC}\n\n## 关于对方的已知信息\n"
+        f"{_render_manual_context(manual_context)}\n{(memory_text or '').strip()}"
+    )
+    user = f"## 当前对话(最后一条是对方刚发的)\n{convo}\n\n请按三行格式输出判定:"
+    return llm.call_text(model, system, user, max_tokens=220, temperature=0.3)
+
+
 def render(messages, last_n: int) -> str:
     """把消息列表渲染成 '发送者: 内容' 的多行文本。"""
     rows = []
@@ -63,11 +99,17 @@ def draft_reply(
     last_n: int = 8,
     manual_context: dict | None = None,
     temperature: float = 0.7,
+    stage_hint: str = "",
 ) -> str:
     convo = render(messages, last_n)
+    stage_block = (
+        f"## 军师判定(按它的阶段校准火候,别越级推进;它给的是方向不是台词,禁止照抄它的措辞)\n{stage_hint}\n\n"
+        if stage_hint else ""
+    )
     # 人设放最前定调,硬规则压轴 —— 小模型对开头和结尾的指令最敏感
     system = (
         f"{_ROLE}\n\n## 人设(你的说话方式)\n{persona_text}\n\n"
+        f"{stage_block}"
         f"## 手动上下文(优先级最高)\n{_render_manual_context(manual_context)}\n\n"
         f"## 关于该联系人的记忆\n{memory_text or '(暂无)'}\n\n"
         f"## 输出硬规则\n{_RULES}"
