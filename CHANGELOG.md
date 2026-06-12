@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased - 2026-06-10 (回归测试套件)
+
+### Added
+- `test_draftmate.py`:23 个 unittest(stdlib,无新依赖),覆盖今天新增的核心纯逻辑——历史拼接去重(stitch/重叠/到顶/发言人指纹)、微信时间戳解析(纯时间/昨天/星期X/年月日/月日 + OCR 容错"昨大" + 乱码 + 单调取最早)、agent render 截断/分人设温度/手动上下文渲染、人设 `.local.md` 回退、记忆 save/load 往返(临时目录隔离)、用量手动/自动分计、云端无 key 必本地。0.01s 跑完,不依赖 ollama/网络/截图。
+- 命令:`.venv/bin/python -m unittest test_draftmate -v`。补上此前裸奔的 ~1300 行新代码的回归保护。
+
 ## Unreleased - 2026-06-10 (可选云端模型开关)
 
 ### Added

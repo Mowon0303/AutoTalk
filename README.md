@@ -67,6 +67,7 @@ app_aliases: []               # 若该 App 窗口属主名是本地化名(和应
 source .venv/bin/activate
 python copilot.py            # 浏览器副驾:左看截图、右看候选回复,点「复制」
 python copilot.py --window   # 原生窗口(需 pywebview)
+python -m unittest test_draftmate -v   # 跑回归测试(纯逻辑,不需 ollama/截图)
 ```
 
 打开后点「读取」(快捷键 ⌘R / Ctrl+R)即可。仅监听本机 `127.0.0.1`,不对外暴露。
