@@ -1,5 +1,26 @@
 # Changelog
 
+## Unreleased - 2026-06-10 (历史导入:自动滚动 + 蒸馏记忆)
+
+> 痛点:逐张截图太累、爬数据库太重。解法:点一下,自动滚完当前对话,蒸馏成长期记忆。
+
+### Added
+- 新模块 `history.py`:自动滚动当前对话 + 多屏截图 OCR 去重拼接 → 一段连续历史。
+  - **M3 自动滚动**:Quartz CGEvent 合成滚轮(**只读导航**);方向自适应(自动应对「自然滚动」开关,首次若反向会自纠);开始前激活目标窗口;`accessibility_ok()` 检测辅助功能权限并引导。
+  - **M2 去重拼接**:按消息指纹(发言人+文本前 24 字)找相邻屏重叠,拼成连续历史;连续两屏无新增 = 到顶。
+  - 滚动定位改用 Quartz `vision.window_box`(和截图同源),**不依赖 AppleScript/System Events**——后者需 Apple Events 自动化权限,本机三个进程名实测全 None。
+- `agent.distill_memory`:整段历史蒸馏成结构化记忆(关系背景/画像/雷区/共同经历/承诺待办/氛围),M1 离线验证过,压缩到 ~50%。
+- `skills.save_summary`:写入 `<联系人>.summary.md`(自动记忆,与手填 profile 分开;`load_memory` 自动并入 prompt)。
+- copilot:设置面板「导入历史记忆」按钮 + 后台线程 + 进度轮询(POST `/api/import_history` / GET `/api/import_status`);完成后把记忆档案显示在 AI 分析卡。
+- config:`history_max_screens`(25)、`history_scroll_lines`(8)。
+
+### Product
+- 「不模拟键鼠」对外表述收窄为「只读屏 + 只读滚动导入历史,永不替你发送」——自动滚动是只读导航,**红线 3(永不自动发送)继续死守**。用户在论文 review 等待窗口期临时放开红线 1 投入此功能。
+
+### Verified
+- 拼接 / 方向自适应 / 权限检测单测通过;Quartz `window_box` 拿到窗口坐标(AppleScript `window_bounds` 本机全 None,已绕开);打包版 `history` 入包、import 端点启动正常(冒烟时实际触发了一次滚动,链路确认活)。
+- **待用户实测**:真实自动滚动的方向/速度、OCR 噪声下的拼接质量(代码已交付,点「导入历史」即可)。
+
 ## Unreleased - 2026-06-10 (军师层:关系阶段判定)
 
 ### Added

@@ -66,6 +66,30 @@ def assess_stage(messages, memory_text: str, model: str, last_n: int = 8,
     return llm.call_text(model, system, user, max_tokens=220, temperature=0.3)
 
 
+# 历史导入:把一段长聊天蒸馏成长期记忆档案(compact)。prompt 已离线验证(M1)。
+_DISTILL_PROMPT = (
+    "你在帮用户整理一位聊天对象的「长期记忆档案」。下面是和这个人的一段历史聊天记录。\n"
+    "从中提取**以后聊天会长期用得上**的信息,忽略寒暄和流水账。\n"
+    "严格按下面结构输出,没有的项写「(未提及)」,**绝不编造对话里没有的事**:\n\n"
+    "## 关系背景\n怎么认识的、当前关系阶段(一句话)\n\n"
+    "## 对方画像\n身份/职业/性格/明确的喜好(每条一行,带依据)\n\n"
+    "## 雷区/边界\nTA 明确表达过的不喜欢、敏感点\n\n"
+    "## 一起经历/聊过的大事\n具体发生过的事、聊过的重要话题(带时间线索如'上周')\n\n"
+    "## 承诺与待办\n说好要做但还没做的事、约定(这部分最重要,别漏)\n\n"
+    "## 最近氛围\n最近几次互动的温度(一句话)\n\n"
+    "只输出档案正文,简洁,每条一行,引用具体事实。"
+)
+
+
+def distill_memory(messages, model: str, manual_context: dict | None = None) -> str:
+    """把整段历史(messages 全量)蒸馏成结构化记忆档案,供写入 <联系人>.summary.md。"""
+    convo = render(messages, len(messages))   # 全量,不截断
+    ctx = _render_manual_context(manual_context)
+    user = (f"## 已知信息(辅助,别和聊天矛盾)\n{ctx}\n\n"
+            f"## 历史聊天记录\n{convo}\n\n请输出记忆档案:")
+    return llm.call_text(model, _DISTILL_PROMPT, user, max_tokens=800, temperature=0.3)
+
+
 def render(messages, last_n: int) -> str:
     """把消息列表渲染成 '发送者: 内容' 的多行文本。"""
     rows = []

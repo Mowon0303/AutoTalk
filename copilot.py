@@ -21,6 +21,7 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 
 import agent
 import config
+import history
 import llm
 import skills
 import vision
@@ -168,6 +169,49 @@ def peek() -> dict:
     return {"title": data.get("chat_title") or "unknown",
             "last_sender": last.get("sender", ""),
             "last_text": last.get("text", "")}
+
+
+# 历史导入的后台状态(单任务,够用):一次只跑一个导入
+_import_state = {"running": False, "done": False, "error": "", "phase": "",
+                 "screens": 0, "messages": 0, "title": "", "summary": ""}
+
+
+def _run_import() -> None:
+    """后台线程:自动滚动采集当前对话历史 → 蒸馏成记忆 → 写入 <联系人>.summary.md。"""
+    try:
+        _import_state.update(running=True, done=False, error="", phase="滚动采集中",
+                             screens=0, messages=0, title="", summary="")
+
+        def prog(p):
+            _import_state.update(screens=p["screens"], messages=p["messages"])
+
+        res = history.import_history(
+            cfg["app_name"], cfg["vision_model"],
+            max_screens=cfg.get("history_max_screens", 25),
+            scroll_lines=cfg.get("history_scroll_lines", 8),
+            on_progress=prog,
+        )
+        msgs = res.get("messages") or []
+        title = res.get("title") or "unknown"
+        if not msgs:
+            raise RuntimeError("没读到任何消息;确认微信停在某个对话上、聊天区可见。")
+        _import_state.update(phase="提取记忆中", title=title, messages=len(msgs))
+        manual = skills.manual_context(title)
+        summary = agent.distill_memory(msgs, cfg["reply_model"], manual)
+        skills.save_summary(title, summary)
+        topped = "(已到顶)" if res.get("reached_top") else "(达上限,可再导一次接着上滚)"
+        _import_state.update(running=False, done=True, phase=f"完成 {topped}", summary=summary)
+    except SystemExit as e:
+        _import_state.update(running=False, done=True, phase="失败", error=_error_text(e))
+    except Exception as e:
+        _import_state.update(running=False, done=True, phase="失败", error=str(e))
+
+
+def start_import() -> dict:
+    if _import_state.get("running"):
+        return {"started": False, "error": "已有导入在进行中"}
+    threading.Thread(target=_run_import, daemon=True).start()
+    return {"started": True}
 
 
 def list_models() -> dict:
@@ -504,6 +548,11 @@ PAGE = r"""<!doctype html>
             <button class="ghost-btn" id="saveReadBtn" type="button" onclick="saveContext(true)">保存并重生</button>
             <span class="save-note" id="saveNote"></span>
           </div>
+          <div class="context-head" style="margin-top:14px"><strong>导入历史记忆</strong><span class="context-state" id="importState">自动滚完当前对话,蒸馏成长期记忆</span></div>
+          <div class="settings-actions">
+            <button class="ghost-btn" id="importBtn" type="button" onclick="startImport()">开始导入(自动滚动)</button>
+            <span class="save-note" id="importNote"></span>
+          </div>
           <div class="context-head" style="margin-top:14px"><strong>运行信息</strong></div>
           <div class="runtime-grid" id="runtimePills"></div>
         </div>
@@ -594,6 +643,9 @@ const els={
   saveContextBtn:document.getElementById('saveContextBtn'),
   saveReadBtn:document.getElementById('saveReadBtn'),
   saveNote:document.getElementById('saveNote'),
+  importBtn:document.getElementById('importBtn'),
+  importNote:document.getElementById('importNote'),
+  importState:document.getElementById('importState'),
   messages:document.getElementById('messages'),
   suggestions:document.getElementById('suggestions'),
   suggestionMeta:document.getElementById('suggestionMeta'),
@@ -987,6 +1039,40 @@ async function regenOne(index,button){
   }catch(err){showError('再生成失败: '+String(err));}
   finally{button.disabled=false;}
 }
+let importPollTimer=null;
+async function startImport(){
+  if(!window.confirm('将自动滚动「当前打开的对话」读取历史(只滚动浏览,不发送任何消息)。\n\n请先确认:微信停在目标对话、聊天区可见、且已在 系统设置→隐私与安全性→辅助功能 勾上本程序。\n\n开始?'))return;
+  els.importBtn.disabled=true;
+  els.importNote.textContent='启动中';
+  try{
+    const res=await fetch('/api/import_history',{method:'POST'});
+    const data=await res.json();
+    if(!data.started){els.importNote.textContent=data.error||'启动失败';els.importBtn.disabled=false;return;}
+    pollImport();
+  }catch(err){els.importNote.textContent='启动失败: '+String(err);els.importBtn.disabled=false;}
+}
+function pollImport(){
+  clearTimeout(importPollTimer);
+  importPollTimer=setTimeout(async()=>{
+    try{
+      const res=await fetch('/api/import_status',{cache:'no-store'});
+      const s=await res.json();
+      if(s.phase==='滚动采集中'){els.importNote.textContent=`滚动采集中 · 已读 ${s.screens} 屏 · ${s.messages} 条`;}
+      else if(s.phase==='提取记忆中'){els.importNote.textContent=`已采集 ${s.messages} 条「${s.title}」,正在蒸馏记忆…`;}
+      if(s.done){
+        els.importBtn.disabled=false;
+        if(s.error){els.importNote.textContent='失败: '+s.error;}
+        else{
+          els.importNote.textContent=`${s.phase} · 已存入「${s.title}」记忆(${s.messages} 条)`;
+          els.importState.textContent='已导入,下次读取自动带上这段记忆';
+          if(s.summary)els.analysisText.textContent='【导入的记忆档案】\n'+s.summary;
+        }
+        return;
+      }
+      pollImport();
+    }catch(_){pollImport();}
+  },800);
+}
 document.addEventListener('keydown',e=>{
   if((e.metaKey||e.ctrlKey)&&(e.key==='r'||e.key==='R')){
     e.preventDefault();
@@ -1032,6 +1118,8 @@ class Handler(BaseHTTPRequestHandler):
             self._json(_public_status())
         elif path == "/api/models":
             self._json(list_models())
+        elif path == "/api/import_status":
+            self._json(_import_state)
         elif path == "/api/peek":
             try:
                 payload = peek()
@@ -1052,6 +1140,9 @@ class Handler(BaseHTTPRequestHandler):
             self._send(404, "text/plain", b"not found")
 
     def do_POST(self):
+        if self.path == "/api/import_history":
+            self._json(start_import())
+            return
         if self.path not in ("/api/context", "/api/regenerate", "/api/model"):
             self._send(404, "text/plain", b"not found")
             return

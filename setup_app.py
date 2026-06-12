@@ -27,7 +27,7 @@ OPTIONS = {
     "argv_emulation": False,
     "packages": ["PIL", "webview"],
     "includes": [
-        "agent", "config", "llm", "skills", "vision",
+        "agent", "config", "history", "llm", "skills", "vision",
         "yaml", "objc", "proxy_tools", "bottle", "typing_extensions",
         "Foundation", "AppKit", "WebKit", "Quartz", "Vision",
     ],

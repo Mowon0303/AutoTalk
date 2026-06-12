@@ -147,3 +147,14 @@ def load_memory(title: str | None) -> str:
     if summ.exists():
         parts.append(summ.read_text(encoding="utf-8"))
     return "\n\n".join(parts).strip()
+
+
+def save_summary(title: str | None, text: str) -> Path:
+    """写入「自动记忆」档案(<联系人>.summary.md),与用户手填的 profile 分开。
+    历史导入蒸馏的结果存这里;load_memory 会自动把它并入 prompt。"""
+    if not title:
+        raise ValueError("缺少联系人标题,无法保存记忆。")
+    MEM_DIR.mkdir(parents=True, exist_ok=True)
+    p = _summary_path(title)
+    p.write_text((text or "").strip() + "\n", encoding="utf-8")
+    return p

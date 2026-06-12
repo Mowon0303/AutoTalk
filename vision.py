@@ -101,6 +101,32 @@ def window_id(process_name: str):
     return None
 
 
+def window_box(process_name: str):
+    """用 Quartz 拿目标主窗口的全局坐标 (x, y, w, h)。和 window_id 同源,
+    比 AppleScript/System Events 可靠(后者需 Apple Events 自动化权限,常拿不到)。"""
+    try:
+        import Quartz
+    except Exception:
+        return None
+    for opt in (Quartz.kCGWindowListOptionOnScreenOnly, Quartz.kCGWindowListOptionAll):
+        wins = Quartz.CGWindowListCopyWindowInfo(opt, Quartz.kCGNullWindowID) or []
+        best, best_area = None, 0.0
+        for w in wins:
+            if not _is_target_owner(w.get("kCGWindowOwnerName"), process_name):
+                continue
+            if w.get("kCGWindowLayer", 0) != 0:
+                continue
+            b = w.get("kCGWindowBounds", {})
+            area = float(b.get("Width", 0)) * float(b.get("Height", 0))
+            if area > best_area:
+                best_area = area
+                best = (int(b.get("X", 0)), int(b.get("Y", 0)),
+                        int(b.get("Width", 0)), int(b.get("Height", 0)))
+        if best:
+            return best
+    return None
+
+
 def list_window_owners() -> list:
     """列出当前所有窗口的 owner 名(诊断用:确认聊天软件到底叫什么)。"""
     try:
