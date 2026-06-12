@@ -228,8 +228,23 @@ def start_import(days=None) -> dict:
     return {"started": True}
 
 
+_CLOUD_REPLY_MODELS = ["claude-sonnet-4-6", "claude-haiku-4-5-20251001", "claude-opus-4-8"]
+
+
+def _cloud_available() -> bool:
+    """云端回复可用 = 有 ANTHROPIC_API_KEY 且 anthropic 包已装。默认(无 key)永远本地。"""
+    if not os.environ.get("ANTHROPIC_API_KEY"):
+        return False
+    try:
+        import anthropic  # noqa: F401
+        return True
+    except Exception:
+        return False
+
+
 def list_models() -> dict:
-    """可选回复模型 = 本地 Ollama 已 pull 的全部模型;当前值不在列表时(如 claude-*)也带上。"""
+    """可选回复模型:本地 Ollama 已 pull 的 +(有 key 时)云端 claude。
+    云端只用于回复生成、只发对话文字;读图 OCR 永远本地。默认本地不变。"""
     names: list[str] = []
     try:
         url = cfg.get("ollama_host", "http://localhost:11434").rstrip("/") + "/api/tags"
@@ -238,10 +253,15 @@ def list_models() -> dict:
         names = sorted({m.get("name", "") for m in data.get("models", []) if m.get("name")})
     except Exception:
         names = []
+    models = [{"name": n, "cloud": False} for n in names]
+    cloud = _cloud_available()
+    if cloud:
+        models += [{"name": m, "cloud": True} for m in _CLOUD_REPLY_MODELS]
     current = cfg.get("reply_model") or ""
-    if current and current not in names:
-        names.insert(0, current)
-    return {"models": names, "reply_model": current, "vision_model": cfg.get("vision_model") or ""}
+    if current and current not in [m["name"] for m in models]:
+        models.insert(0, {"name": current, "cloud": current.lower().startswith("claude")})
+    return {"models": models, "reply_model": current,
+            "vision_model": cfg.get("vision_model") or "", "cloud_available": cloud}
 
 
 def set_reply_model(name: str) -> None:
@@ -829,13 +849,21 @@ function renderModelList(data){
     els.modelList.innerHTML='<div class="empty-state">没找到本地模型。确认 Ollama 已启动,或 ollama pull 一个模型。</div>';
     return;
   }
-  els.modelList.innerHTML=models.map(m=>
-    `<button type="button" class="model-row ${m===data.reply_model?'active':''}" data-model="${esc(m)}" onclick="pickModel(this)"><span>${esc(m)}</span></button>`
-  ).join('');
+  els.modelList.innerHTML=models.map(m=>{
+    const name=(typeof m==='string')?m:m.name;
+    const cloud=(typeof m==='object')&&m.cloud;
+    const tag=cloud?' <span style="color:var(--accent);font-weight:700">☁ 云端</span>':'';
+    return `<button type="button" class="model-row ${name===data.reply_model?'active':''}" data-model="${esc(name)}" data-cloud="${cloud?1:0}" onclick="pickModel(this)"><span>${esc(name)}${tag}</span></button>`;
+  }).join('');
+  if(data&&!data.cloud_available){
+    els.modelList.innerHTML+='<div class="empty-state" style="text-align:left;line-height:1.5">想要更强?设 <code>ANTHROPIC_API_KEY</code> 环境变量 + <code>pip install anthropic</code> 后重启,这里会出现 claude 选项(只发对话文字,截图不上传)。</div>';
+  }
 }
 async function pickModel(btn){
   const name=btn.getAttribute('data-model');
+  const cloud=btn.getAttribute('data-cloud')==='1';
   if(!name||((lastStatus&&lastStatus.reply_model)===name))return;
+  if(cloud&&!window.confirm(`切到云端模型「${name}」:回复生成会把**对话文字**发往 Anthropic(读图/截图仍全本地、不上传)。继续?`))return;
   els.modelHint.textContent='切换中';
   try{
     const res=await fetch('/api/model',{

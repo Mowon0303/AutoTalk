@@ -1,5 +1,14 @@
 # Changelog
 
+## Unreleased - 2026-06-10 (可选云端模型开关)
+
+### Added
+- 模型下拉新增**云端 claude 选项**(claude-sonnet-4-6 / haiku-4-5 / opus-4-8):仅在检测到 `ANTHROPIC_API_KEY` + anthropic 包时出现,带 ☁ 标记;切换时弹确认"会把对话文字发往 Anthropic(读图/截图仍全本地、不上传)";没 key 时不打扰、改显示开启指引。**默认仍本地 Ollama、隐私红线不变**——云端只用于回复生成、只传文字。
+- `_cloud_available()` 检测 key+包,缺任一即回落本地(容错);`list_models` 返回项带 `cloud` 标记 + `cloud_available`。llm 早已按模型名路由(claude-* 走云端),本次把入口接到 UI。
+
+### Note
+- 分发的 `.app` 默认**不打包 anthropic**(保持本地纯净、包小、契合隐私卖点);云端开关在源码/开发态(venv 装 anthropic)可用。要让分发版也支持云端,需把 anthropic 加进 py2app includes(有打包依赖风险:httpx/pydantic 等,Gate 1 后再评估)。Phase 0 验证主打本地版,分发版不带云端反而契合"截图不出本机"的演示。
+
 ## Unreleased - 2026-06-10 (历史导入:按天数决定采集范围)
 
 ### Added
