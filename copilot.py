@@ -197,7 +197,14 @@ def _run_import() -> None:
             raise RuntimeError("没读到任何消息;确认微信停在某个对话上、聊天区可见。")
         _import_state.update(phase="提取记忆中", title=title, messages=len(msgs))
         manual = skills.manual_context(title)
-        summary = agent.distill_memory(msgs, cfg["reply_model"], manual)
+
+        def dprog(p):
+            if p.get("phase") == "map":
+                _import_state.update(phase=f"提取记忆中 · 摘录 {p['i']}/{p['n']} 段")
+            else:
+                _import_state.update(phase="提取记忆中 · 合并归类")
+
+        summary = agent.distill_memory(msgs, cfg["reply_model"], manual, on_progress=dprog)
         skills.save_summary(title, summary)
         topped = "(已到顶)" if res.get("reached_top") else "(达上限,可再导一次接着上滚)"
         _import_state.update(running=False, done=True, phase=f"完成 {topped}", summary=summary)
@@ -1058,7 +1065,7 @@ function pollImport(){
       const res=await fetch('/api/import_status',{cache:'no-store'});
       const s=await res.json();
       if(s.phase==='滚动采集中'){els.importNote.textContent=`滚动采集中 · 已读 ${s.screens} 屏 · ${s.messages} 条`;}
-      else if(s.phase==='提取记忆中'){els.importNote.textContent=`已采集 ${s.messages} 条「${s.title}」,正在蒸馏记忆…`;}
+      else if(s.phase&&s.phase.indexOf('提取记忆中')===0){els.importNote.textContent=`${s.phase} ·「${s.title}」${s.messages} 条`;}
       if(s.done){
         els.importBtn.disabled=false;
         if(s.error){els.importNote.textContent='失败: '+s.error;}

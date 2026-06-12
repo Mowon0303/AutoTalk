@@ -66,34 +66,65 @@ def assess_stage(messages, memory_text: str, model: str, last_n: int = 8,
     return llm.call_text(model, system, user, max_tokens=220, temperature=0.3)
 
 
-# 历史导入:把一段长聊天蒸馏成长期记忆档案(compact)。
-# 真实数据实测教训:7B 在长 OCR 噪声输入上会把口头梗当实体、以偏概全(如"冷知识"当游戏、
-# 只聊到的原神写成"喜欢玩")。对策=强制每条附原文引用 [据:"原话"],编不出引用就不准写——
-# 既抑制泛化/幻觉,又让用户能逐条核对。
-_DISTILL_PROMPT = (
-    "你在把一段聊天记录蒸馏成「长期记忆档案」。记录由 OCR 得到,**有噪声和乱码**,看不懂的行直接跳过。\n"
-    "铁律(违反即失败):\n"
-    "- 只写对话里**真实出现过**的信息,每条要点后必须附原文引用作证据,格式 [据:\"原话\"]。\n"
-    "- 引用不出来就**不要写**,宁可漏不可编;乱码不要猜;**禁止用常识联想**补充没出现的东西。\n"
-    "- 别把一次性提到的当成'喜欢/习惯',别把口头梗当成真实体。\n\n"
-    "按结构输出,没内容的项写「(无)」:\n"
-    "## 关系背景\n一句话:怎么认识的/现在算什么关系 [据:\"...\"](没线索就写'(无足够线索)')\n\n"
-    "## 对方画像\n- 身份/处境/性格/喜好,每条 [据:\"原话\"]\n\n"
-    "## 雷区/边界\n- TA 明说过的不喜欢、敏感点 [据:\"原话\"]\n\n"
-    "## 一起经历/聊过的大事\n- 具体话题或事件 [据:\"原话\"]\n\n"
-    "## 承诺与待办\n- 说好要做但还没做的事 [据:\"原话\"]\n\n"
+# 历史导入:把长聊天蒸馏成记忆档案。
+# 真实数据实测:7B 输入越长越容易①把口头梗当实体/以偏概全 ②归类错位(把球赛闲聊塞进'承诺待办')。
+# 对策 = map-reduce:分块摘录(每块短→归类准)→ 合并归类去重;全程强制原文引用 [据:"原话"] 抑制编造。
+_MAP_PROMPT = (
+    "下面是一段聊天记录的**一个片段**(OCR,有噪声乱码,看不懂的行跳过)。\n"
+    "逐条摘录**以后聊天用得上**的事实,每条一行,格式严格为:  [类型] 内容 [据:\"原话\"]\n"
+    "类型只能用这五种:\n"
+    "  画像 = 对方身份/处境/性格/喜好    雷区 = TA 明说过的不喜欢/敏感点\n"
+    "  事件 = 聊过的话题或发生的事        承诺 = **明确约好将来要做的事**(如'下周一起吃饭')\n"
+    "  氛围 = 这段聊天的语气\n"
+    "铁律:只摘真实出现的,引用不出原话就不写;乱码不猜;不联想常识(别因聊到某游戏就补没出现的游戏名)。\n"
+    "**特别注意**:球赛/游戏的评论、感叹、玩笑**都不是承诺**;别人聊的话题不等于 TA 的喜好。\n"
+    "本段没有的类型就不写。只输出要点行,不要小标题、不要总结。"
+)
+
+# 单块/reduce 共用的结构化输出模板:只整理不推断。
+_STRUCT_PROMPT = (
+    "把下面的信息**整理**成一份联系人记忆档案。只做归类、去重、整理,"
+    "**不新增推断、不联想常识**;矛盾时取有原文引用支撑的那条。\n"
+    "按结构输出,某类没内容写「(无)」:\n"
+    "## 关系背景\n一句话:怎么认识/现在算什么关系(没线索写'(无足够线索)')\n"
+    "## 对方画像\n- 身份/处境/性格/喜好,每条带 [据:\"原话\"]\n"
+    "## 雷区/边界\n- TA 明说过的不喜欢/敏感点 [据:\"原话\"]\n"
+    "## 一起经历/聊过的大事\n- 具体话题或事件 [据:\"原话\"]\n"
+    "## 承诺与待办\n- **只保留明确约好将来要做的事**;球赛/游戏评论、感叹、玩笑不算 [据:\"原话\"]\n"
     "## 最近氛围\n一句话"
 )
 
 
-def distill_memory(messages, model: str, manual_context: dict | None = None) -> str:
-    """把整段历史(messages 全量)蒸馏成结构化记忆档案,供写入 <联系人>.summary.md。
-    每条带原文引用以抑制 7B 在长噪声输入上的泛化/幻觉(真实数据实测)。"""
-    convo = render(messages, len(messages))   # 全量,不截断
+def distill_memory(messages, model: str, manual_context: dict | None = None,
+                   chunk_size: int = 35, on_progress=None) -> str:
+    """长聊天蒸馏成记忆档案。短历史(≤chunk_size)单次蒸馏;长历史 map-reduce
+    (分块摘录→合并归类),避免 7B 在长输入上归类错位/泛化。on_progress({phase,i,n}) 可选进度回调。"""
+    msgs = list(messages or [])
     ctx = _render_manual_context(manual_context)
+    if len(msgs) <= chunk_size:
+        convo = render(msgs, len(msgs))
+        user = (f"## 已知信息(辅助,别和聊天矛盾)\n{ctx}\n\n"
+                f"## 聊天记录(OCR,有噪声)\n{convo}\n\n整理成档案:")
+        return llm.call_text(model, _STRUCT_PROMPT, user, max_tokens=900, temperature=0.2)
+    # map:分块摘录带类型标签的要点(每块输入短,归类准)
+    chunks = [msgs[i:i + chunk_size] for i in range(0, len(msgs), chunk_size)]
+    points = []
+    for idx, c in enumerate(chunks):
+        if on_progress:
+            on_progress({"phase": "map", "i": idx + 1, "n": len(chunks)})
+        convo = render(c, len(c))
+        out = llm.call_text(model, _MAP_PROMPT,
+                            f"## 片段({idx + 1}/{len(chunks)})\n{convo}\n\n摘录要点:",
+                            max_tokens=600, temperature=0.2)
+        if out.strip():
+            points.append(out.strip())
+    # reduce:把各块要点(已干净)归类去重成档案
+    if on_progress:
+        on_progress({"phase": "reduce", "i": len(chunks), "n": len(chunks)})
+    allpoints = "\n".join(points)
     user = (f"## 已知信息(辅助,别和聊天矛盾)\n{ctx}\n\n"
-            f"## 聊天记录(OCR,有噪声)\n{convo}\n\n请做事实摘录:")
-    return llm.call_text(model, _DISTILL_PROMPT, user, max_tokens=900, temperature=0.2)
+            f"## 从长聊天分段摘录的要点(已带[类型]标签和原文引用)\n{allpoints}\n\n整理成档案:")
+    return llm.call_text(model, _STRUCT_PROMPT, user, max_tokens=900, temperature=0.2)
 
 
 def render(messages, last_n: int) -> str:
