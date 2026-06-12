@@ -176,18 +176,20 @@ _import_state = {"running": False, "done": False, "error": "", "phase": "",
                  "screens": 0, "messages": 0, "title": "", "summary": ""}
 
 
-def _run_import() -> None:
-    """后台线程:自动滚动采集当前对话历史 → 蒸馏成记忆 → 写入 <联系人>.summary.md。"""
+def _run_import(days=None) -> None:
+    """后台线程:自动滚动采集当前对话「最近 days 天」历史 → 蒸馏成记忆 → 写入 <联系人>.summary.md。"""
     try:
         _import_state.update(running=True, done=False, error="", phase="滚动采集中",
-                             screens=0, messages=0, title="", summary="")
+                             screens=0, messages=0, title="", summary="", earliest="")
 
         def prog(p):
-            _import_state.update(screens=p["screens"], messages=p["messages"])
+            _import_state.update(screens=p["screens"], messages=p["messages"],
+                                 earliest=p.get("earliest", ""))
 
         res = history.import_history(
             cfg["app_name"], cfg["vision_model"],
-            max_screens=cfg.get("history_max_screens", 25),
+            days=days if days is not None else cfg.get("history_days", 7),
+            max_screens=cfg.get("history_max_screens", 60),
             scroll_lines=cfg.get("history_scroll_lines", 8),
             on_progress=prog,
         )
@@ -206,7 +208,12 @@ def _run_import() -> None:
 
         summary = agent.distill_memory(msgs, cfg["reply_model"], manual, on_progress=dprog)
         skills.save_summary(title, summary)
-        topped = "(已到顶)" if res.get("reached_top") else "(达上限,可再导一次接着上滚)"
+        if res.get("reached_target"):
+            topped = f"(已覆盖最近 {days if days is not None else cfg.get('history_days', 7)} 天)"
+        elif res.get("reached_top"):
+            topped = "(已到对话最顶)"
+        else:
+            topped = "(达滚动上限,可再导一次接着上滚)"
         _import_state.update(running=False, done=True, phase=f"完成 {topped}", summary=summary)
     except SystemExit as e:
         _import_state.update(running=False, done=True, phase="失败", error=_error_text(e))
@@ -214,10 +221,10 @@ def _run_import() -> None:
         _import_state.update(running=False, done=True, phase="失败", error=str(e))
 
 
-def start_import() -> dict:
+def start_import(days=None) -> dict:
     if _import_state.get("running"):
         return {"started": False, "error": "已有导入在进行中"}
-    threading.Thread(target=_run_import, daemon=True).start()
+    threading.Thread(target=_run_import, args=(days,), daemon=True).start()
     return {"started": True}
 
 
@@ -555,8 +562,15 @@ PAGE = r"""<!doctype html>
             <button class="ghost-btn" id="saveReadBtn" type="button" onclick="saveContext(true)">保存并重生</button>
             <span class="save-note" id="saveNote"></span>
           </div>
-          <div class="context-head" style="margin-top:14px"><strong>导入历史记忆</strong><span class="context-state" id="importState">自动滚完当前对话,蒸馏成长期记忆</span></div>
+          <div class="context-head" style="margin-top:14px"><strong>导入历史记忆</strong><span class="context-state" id="importState">自动滚读当前对话,蒸馏成长期记忆</span></div>
           <div class="settings-actions">
+            <select id="importDays" class="ghost-btn" style="padding:0 8px">
+              <option value="3">最近 3 天</option>
+              <option value="7" selected>最近 7 天</option>
+              <option value="14">最近 14 天</option>
+              <option value="30">最近 30 天</option>
+              <option value="all">全部(滚到顶)</option>
+            </select>
             <button class="ghost-btn" id="importBtn" type="button" onclick="startImport()">开始导入(自动滚动)</button>
             <span class="save-note" id="importNote"></span>
           </div>
@@ -651,6 +665,7 @@ const els={
   saveReadBtn:document.getElementById('saveReadBtn'),
   saveNote:document.getElementById('saveNote'),
   importBtn:document.getElementById('importBtn'),
+  importDays:document.getElementById('importDays'),
   importNote:document.getElementById('importNote'),
   importState:document.getElementById('importState'),
   messages:document.getElementById('messages'),
@@ -1048,11 +1063,16 @@ async function regenOne(index,button){
 }
 let importPollTimer=null;
 async function startImport(){
-  if(!window.confirm('将自动滚动「当前打开的对话」读取历史(只滚动浏览,不发送任何消息)。\n\n请先确认:微信停在目标对话、聊天区可见、且已在 系统设置→隐私与安全性→辅助功能 勾上本程序。\n\n开始?'))return;
+  const days=els.importDays?els.importDays.value:'7';
+  const label=days==='all'?'全部历史(滚到顶)':`最近 ${days} 天`;
+  if(!window.confirm(`将自动滚动「当前打开的对话」读取${label}(只滚动浏览,不发送任何消息)。\n\n请先确认:微信停在目标对话、聊天区可见、且已在 系统设置→隐私与安全性→辅助功能 勾上本程序。\n\n开始?`))return;
   els.importBtn.disabled=true;
   els.importNote.textContent='启动中';
   try{
-    const res=await fetch('/api/import_history',{method:'POST'});
+    const res=await fetch('/api/import_history',{
+      method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({days:days})
+    });
     const data=await res.json();
     if(!data.started){els.importNote.textContent=data.error||'启动失败';els.importBtn.disabled=false;return;}
     pollImport();
@@ -1064,7 +1084,7 @@ function pollImport(){
     try{
       const res=await fetch('/api/import_status',{cache:'no-store'});
       const s=await res.json();
-      if(s.phase==='滚动采集中'){els.importNote.textContent=`滚动采集中 · 已读 ${s.screens} 屏 · ${s.messages} 条`;}
+      if(s.phase==='滚动采集中'){els.importNote.textContent=`滚动采集中 · ${s.screens} 屏 · ${s.messages} 条${s.earliest?` · 已滚到 ${s.earliest.slice(5)}`:''}`;}
       else if(s.phase&&s.phase.indexOf('提取记忆中')===0){els.importNote.textContent=`${s.phase} ·「${s.title}」${s.messages} 条`;}
       if(s.done){
         els.importBtn.disabled=false;
@@ -1148,7 +1168,13 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         if self.path == "/api/import_history":
-            self._json(start_import())
+            try:
+                n = int(self.headers.get("Content-Length", "0") or "0")
+                body = json.loads(self.rfile.read(n).decode("utf-8")) if n else {}
+            except Exception:
+                body = {}
+            days = body.get("days")
+            self._json(start_import(None if days in (None, "", "all") else int(days)))
             return
         if self.path not in ("/api/context", "/api/regenerate", "/api/model"):
             self._send(404, "text/plain", b"not found")

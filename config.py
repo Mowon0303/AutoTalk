@@ -67,7 +67,8 @@ _DEFAULTS = {
     "app_aliases": [],
     "read_last_n": 8,
     "poll_interval_seconds": 5,
-    "history_max_screens": 25,      # 导入历史时最多自动滚多少屏(防失控)
+    "history_days": 7,              # 导入历史默认采集「最近几天」(按系统时间戳停;UI 可选)
+    "history_max_screens": 60,      # 硬上限兜底:最多自动滚多少屏(防解析失败时失控)
     "history_scroll_lines": 8,      # 每屏向上滚多少行(太大跳屏拼不上,太小慢)
     "default_persona": "serious",
     "contacts": {},

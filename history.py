@@ -5,6 +5,7 @@
 """
 from __future__ import annotations
 
+import datetime
 import os
 import re
 import time
@@ -14,6 +15,47 @@ import vision
 # 滚轮方向:正值=向上看更早的历史。macOS「自然滚动」开关会影响实际方向,
 # 实测若反了把这个改成 -1。
 SCROLL_DIR = 1
+
+
+# ════════════════════ 微信系统时间戳解析(按天数决定采集范围)════════════════════
+_WD = {"一": 0, "二": 1, "三": 2, "四": 3, "五": 4, "六": 5, "日": 6, "天": 6}
+
+
+def parse_wechat_date(text: str, today: datetime.date):
+    """微信系统戳 → 绝对日期。相对戳("昨天"/"星期三"/纯时间)基准=today(必须用采集当下的日期)。
+    容错 OCR("昨大"=昨天、"星里"≈星期);解析不出返回 None。实测真实噪声戳 100% 命中。"""
+    t = (text or "").strip()
+    if re.fullmatch(r"\d{1,2}[:：]\d{2}", t):                 # 纯时间 = 今天
+        return today
+    if t.startswith(("昨天", "昨大", "昨")):
+        return today - datetime.timedelta(days=1)
+    if t.startswith("前天"):
+        return today - datetime.timedelta(days=2)
+    m = re.search(r"[星里][期朋].?([一二三四五六日天])|周([一二三四五六日天])", t)   # 星期X(容错)
+    if m:
+        wd = _WD[m.group(1) or m.group(2)]
+        return today - datetime.timedelta(days=(today.weekday() - wd) % 7)
+    m = re.search(r"(20\d{2})\s*年\s*(\d{1,2})\s*[月.]\s*(\d{1,2})", t)        # 年月日
+    if m:
+        try:
+            return datetime.date(int(m.group(1)), int(m.group(2)), int(m.group(3)))
+        except ValueError:
+            return None
+    m = re.search(r"(\d{1,2})\s*[.月]\s*(\d{1,2})", t)                         # 月.日(当年)
+    if m:
+        try:
+            return datetime.date(today.year, int(m.group(1)), int(m.group(2)))
+        except ValueError:
+            return None
+    return None
+
+
+def _earliest_in_screen(msgs: list, today: datetime.date):
+    """本屏系统戳里能解析出的最早日期(没有则 None)。"""
+    dates = [parse_wechat_date(m.get("text"), today)
+             for m in msgs if m.get("sender") == "系统"]
+    dates = [d for d in dates if d]
+    return min(dates) if dates else None
 
 
 # ════════════════════ 自动滚动(M3,只读导航)════════════════════
@@ -103,10 +145,12 @@ def stitch(known: list, earlier: list) -> tuple[list, int]:
 
 
 # ════════════════════ 采集编排(M3 + M2)════════════════════
-def import_history(process_name: str, model: str, *, max_screens: int = 25,
-                   scroll_lines: int = 8, settle: float = 0.7, on_progress=None) -> dict:
-    """自动往上滚到顶并拼出完整历史。返回 {title, messages, screens, reached_top}。
-    on_progress(dict) 每屏回调一次,用于 UI 进度。"""
+def import_history(process_name: str, model: str, *, days: int | None = 7,
+                   max_screens: int = 60, scroll_lines: int = 8, settle: float = 0.7,
+                   on_progress=None, today: datetime.date | None = None) -> dict:
+    """自动往上滚、拼出历史。按 days 决定范围(滚到「最近 days 天」就停;None=滚到顶);
+    max_screens 是硬上限兜底。返回 {title, messages, screens, reached_top, reached_target, earliest}。
+    on_progress(dict) 每屏回调,带 earliest(已滚到的最早日期)。"""
     if not accessibility_ok():
         raise RuntimeError(
             "自动滚动需要「辅助功能」权限:系统设置→隐私与安全性→辅助功能,"
@@ -114,6 +158,9 @@ def import_history(process_name: str, model: str, *, max_screens: int = 25,
         )
     activate(process_name)
     time.sleep(0.3)
+    today = today or datetime.date.today()
+    cutoff = today - datetime.timedelta(days=days) if days else None
+    earliest = today                 # 已滚到的最早可信日期(单调,只接受更早,吸收 OCR ±1 天抖动)
     known: list = []
     title = None
     no_gain = 0
@@ -136,18 +183,29 @@ def import_history(process_name: str, model: str, *, max_screens: int = 25,
             known, added = msgs, len(msgs)
         else:
             known, added = stitch(known, msgs)
+        # 按天:本屏最早戳更新全局最早(单调,晚跳的判为 OCR 噪声忽略)
+        d = _earliest_in_screen(msgs, today)
+        if d and d < earliest:
+            earliest = d
         if on_progress:
-            on_progress({"screens": screens, "messages": len(known), "added": added})
+            on_progress({"screens": screens, "messages": len(known), "added": added,
+                         "earliest": earliest.isoformat()})
+        if cutoff and earliest < cutoff:      # 已滚过「最近 days 天」→ 达标停止
+            return {"title": title, "messages": known, "screens": screens,
+                    "reached_top": False, "reached_target": True, "earliest": earliest.isoformat()}
         if added == 0:
             no_gain += 1
             if no_gain >= 2:
                 if not flipped:           # 可能方向反了(往下滚到底了)→ 翻转再试
                     direction, flipped, no_gain = -direction, True, 0
                 else:                     # 翻转后仍没新增 = 真到顶
-                    return {"title": title, "messages": known, "screens": screens, "reached_top": True}
+                    return {"title": title, "messages": known, "screens": screens,
+                            "reached_top": True, "reached_target": False, "earliest": earliest.isoformat()}
         else:
             no_gain = 0
         if not scroll_up(process_name, scroll_lines, direction):
-            return {"title": title, "messages": known, "screens": screens, "reached_top": False}
+            return {"title": title, "messages": known, "screens": screens,
+                    "reached_top": False, "reached_target": False, "earliest": earliest.isoformat()}
         time.sleep(settle)        # 等微信渲染稳定再截下一屏
-    return {"title": title, "messages": known, "screens": screens, "reached_top": False}
+    return {"title": title, "messages": known, "screens": screens,
+            "reached_top": False, "reached_target": False, "earliest": earliest.isoformat()}
