@@ -28,14 +28,25 @@ def accessibility_ok() -> bool:
     return True
 
 
-def activate(process_name: str) -> None:
-    """把目标 App 窗口带到前台(best-effort)。自动滚动要求窗口可见且在原位,否则滚轮会落到别的窗口。"""
+def activate(process_name: str) -> bool:
+    """把目标 App 窗口带到前台。自动滚动要求窗口可见且在最上层,否则滚轮会落到别的窗口。
+    优先 Cocoa NSRunningApplication(绕开 AppleScript;后者需 Apple Events 权限,实测常废),退路 AppleScript。"""
+    pid = vision.window_pid(process_name)
+    if pid:
+        try:
+            import AppKit
+            ra = AppKit.NSRunningApplication.runningApplicationWithProcessIdentifier_(pid)
+            if ra and ra.activateWithOptions_(AppKit.NSApplicationActivateIgnoringOtherApps):
+                return True
+        except Exception:
+            pass
     names = [process_name] + [a for a in vision._ALIASES if a]
     for name in names:
         if vision._osascript(f'tell application "System Events" to set frontmost of process "{name}" to true'):
-            return
-    if process_name:   # 退路:按 application 名激活
+            return True
+    if process_name:
         vision._osascript(f'tell application "{process_name}" to activate')
+    return False
 
 
 def scroll_up(process_name: str, lines: int = 8, direction: int = SCROLL_DIR) -> bool:

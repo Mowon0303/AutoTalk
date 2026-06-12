@@ -127,6 +127,29 @@ def window_box(process_name: str):
     return None
 
 
+def window_pid(process_name: str):
+    """目标主窗口的进程 PID(Quartz)。用于 Cocoa NSRunningApplication 激活,绕开 AppleScript。"""
+    try:
+        import Quartz
+    except Exception:
+        return None
+    for opt in (Quartz.kCGWindowListOptionOnScreenOnly, Quartz.kCGWindowListOptionAll):
+        wins = Quartz.CGWindowListCopyWindowInfo(opt, Quartz.kCGNullWindowID) or []
+        best_pid, best_area = None, 0.0
+        for w in wins:
+            if not _is_target_owner(w.get("kCGWindowOwnerName"), process_name):
+                continue
+            if w.get("kCGWindowLayer", 0) != 0:
+                continue
+            b = w.get("kCGWindowBounds", {})
+            area = float(b.get("Width", 0)) * float(b.get("Height", 0))
+            if area > best_area:
+                best_area, best_pid = area, w.get("kCGWindowOwnerPID")
+        if best_pid:
+            return int(best_pid)
+    return None
+
+
 def list_window_owners() -> list:
     """列出当前所有窗口的 owner 名(诊断用:确认聊天软件到底叫什么)。"""
     try:
